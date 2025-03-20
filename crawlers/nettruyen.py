@@ -11,7 +11,7 @@ class NetTruyenCrawler(BaseCrawler):
     """Crawler cho website NetTruyen"""
     
     def __init__(self, logger=None, chromedriver_path=None):
-        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\System\crawlers\chromedriver.exe")
+        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe")
         self.name = "NetTruyen"
         self.base_url = "https://nettruyenvie.com"
     
@@ -106,12 +106,6 @@ class NetTruyenCrawler(BaseCrawler):
             story["views"] = self.extract_number(views_text)
             story["rating_count"] = self.extract_number(rating_count_text)
             
-            # Lấy thể loại
-            try:
-                genre_elements = driver.find_elements(By.CSS_SELECTOR, "li.kind.row p.col-xs-8 a")
-                story["genres"] = [genre.text.strip() for genre in genre_elements]
-            except:
-                story["genres"] = []
                 
             # Lấy mô tả
             story["description"] = self.get_text_safe(driver, ".detail-content p")

@@ -63,7 +63,7 @@ class BaseCrawler:
                 return int(text_value)
                 
             # Xử lý giá trị trống hoặc không có
-            if not text_value or text_value == 'N/A':
+            if not text_value or text_value == 'N/A' or text_value == 'Đang cập nhật':
                 return 0
                 
             text_value = str(text_value).strip()

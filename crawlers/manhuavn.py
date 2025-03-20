@@ -11,7 +11,7 @@ class ManhuaVNCrawler(BaseCrawler):
     """Crawler cho website ManhuaVN"""
     
     def __init__(self, logger=None, chromedriver_path=None):
-        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\System\crawlers\chromedriver.exe")
+        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe")
         self.name = "ManhuaVN"
         self.base_url = "https://manhuavn.top"
     
@@ -101,12 +101,6 @@ class ManhuaVNCrawler(BaseCrawler):
             except:
                 story["author"] = "N/A"
                 
-            # Lấy thể loại
-            try:
-                genre_elements = driver.find_elements(By.CSS_SELECTOR, ".info-row a[href*='theloai']")
-                story["genres"] = [genre.text.strip() for genre in genre_elements]
-            except:
-                story["genres"] = []
                 
         except Exception as e:
             self.log(f"Lỗi khi lấy chi tiết truyện: {str(e)}", level="error", emit_log=emit_log)

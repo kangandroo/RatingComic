@@ -2,6 +2,8 @@ import os
 from datetime import timedelta
 
 class Config:
+    
+    STORY_DB_DIR = 'databases/stories'
     # Flask config
     SECRET_KEY = os.environ.get('SECRET_KEY', 'your-secret-key-goes-here')
     DEBUG = os.environ.get('FLASK_DEBUG', 'True') == 'True'

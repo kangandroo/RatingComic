@@ -10,7 +10,7 @@ class TruyenQQCrawler(BaseCrawler):
     """Crawler cho website TruyenQQ"""
     
     def __init__(self, logger=None, chromedriver_path=None):
-        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\System\crawlers\chromedriver.exe")
+        super().__init__(logger, chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe")
         self.name = "TruyenQQ"
         self.base_url = "https://truyenqqto.com"
     
@@ -38,7 +38,7 @@ class TruyenQQCrawler(BaseCrawler):
                 for story in story_elements:
                     try:
                         # Lấy thông tin cơ bản
-                        title_element = story.find_element(By.CSS_SELECTOR, ".book_name h3 a")
+                        title_element = story.find_element(By.CSS_SELECTOR, ".book_name.qtip h3 a")
                         title = title_element.get_attribute("title")
                         url = title_element.get_attribute("href")
                         
@@ -122,11 +122,11 @@ class TruyenQQCrawler(BaseCrawler):
             story["views"] = self.extract_number(views_text)
             
             # Lấy thể loại
-            try:
-                genre_elements = driver.find_elements(By.CSS_SELECTOR, ".list-info .kind p a")
-                story["genres"] = [genre.text.strip() for genre in genre_elements]
-            except:
-                story["genres"] = []
+            # try:
+            #     genre_elements = driver.find_elements(By.CSS_SELECTOR, ".list-info .kind p a")
+            #     story["genres"] = [genre.text.strip() for genre in genre_elements]
+            # except:
+            #     story["genres"] = []
                 
             # Lấy mô tả
             try:
