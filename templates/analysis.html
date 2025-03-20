@@ -1,0 +1,648 @@
+{% extends 'base.html' %}
+
+{% block title %}Kết quả phân tích - Comic Analyzer{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Trang chủ</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('stories_list') }}">Danh sách truyện</a></li>
+                <li class="breadcrumb-item active">Kết quả phân tích</li>
+            </ol>
+        </nav>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h1 class="h3 mb-0"><i class="fas fa-chart-pie me-2"></i>Kết quả phân tích truyện</h1>
+                <form action="{{ url_for('export_analysis') }}" method="post">
+                    {% for story in stories %}
+                        <input type="hidden" name="story_ids" value="{{ story.id }}">
+                    {% endfor %}
+                    <button type="submit" class="btn btn-light">
+                        <i class="fas fa-file-excel me-2"></i>Xuất Excel
+                    </button>
+                </form>
+            </div>
+            <div class="card-body">
+                <div class="mb-4">
+                    <h4 class="mb-3">Thống kê tổng quan</h4>
+                    <div class="row text-center">
+                        <div class="col-md-3 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-number">{{ stories|length }}</div>
+                                <div class="stat-label">Truyện đã phân tích</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-number">{{ stories|map(attribute='comments')|map('length')|sum }}</div>
+                                <div class="stat-label">Bình luận đã phân tích</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-number">{{ (stories|selectattr('positive_ratio')|map(attribute='positive_ratio')|sum / stories|length * 100)|round(1) }}%</div>
+                                <div class="stat-label">Cảm xúc tích cực</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-number">{{ (stories|map(attribute='final_rating')|max)|round(1) }}</div>
+                                <div class="stat-label">Điểm đánh giá cao nhất</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="mb-4">
+                    <h4 class="mb-3">Biểu đồ đánh giá</h4>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="chart-container">
+                                <canvas id="ratingChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="chart-container">
+                                <canvas id="sentimentChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <h4 class="mb-3">Kết quả chi tiết</h4>
+                
+                {% for story in stories|sort(attribute='final_rating', reverse=true) %}
+                    <div class="story-card mb-4">
+                        <div class="story-header" data-bs-toggle="collapse" data-bs-target="#story-{{ story.id }}-details">
+                            <div class="story-info">
+                                <div class="story-image">
+                                    {% if story.cover_url %}
+                                        <img src="{{ story.cover_url }}" alt="{{ story.title }}">
+                                    {% else %}
+                                        <div class="no-image">
+                                            <i class="fas fa-book"></i>
+                                        </div>
+                                    {% endif %}
+                                </div>
+                                <div class="story-title">
+                                    <h5>{{ story.title }}</h5>
+                                    <div class="story-meta">
+                                        <span class="meta-item"><i class="fas fa-user me-1"></i>{{ story.author }}</span>
+                                        <span class="meta-item"><i class="fas fa-book-open me-1"></i>{{ story.chapter_count }} chương</span>
+                                        <span class="meta-item"><i class="fas fa-eye me-1"></i>{{ story.views|default(0)|thousandSeparator }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="story-rating">
+                                <div class="rating-badge">{{ story.final_rating|round(1) }}</div>
+                                <div class="rating-text">Điểm tổng hợp</div>
+                            </div>
+                        </div>
+                        
+                        <div class="collapse" id="story-{{ story.id }}-details">
+                            <div class="story-details">
+                                <div class="row mb-3">
+                                    <div class="col-md-8">
+                                        <h6>Mô tả</h6>
+                                        <p>{{ story.description }}</p>
+                                        
+                                        <h6 class="mt-3">Thể loại</h6>
+                                        <div class="story-genres">
+                                            {% if story.genres %}
+                                                {% set genre_list = story.genres.split(',') %}
+                                                {% for genre in genre_list %}
+                                                    <span class="badge bg-secondary">{{ genre }}</span>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span class="text-muted">Chưa phân loại</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <h6>Đánh giá chi tiết</h6>
+                                        <table class="table table-sm">
+                                            <tr>
+                                                <td>Điểm lượt xem:</td>
+                                                <td class="text-end">{{ story.view_score|round(2) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Điểm lượt thích:</td>
+                                                <td class="text-end">{{ story.like_score|round(2) if story.like_score else 'N/A' }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Điểm lượt theo dõi:</td>
+                                                <td class="text-end">{{ story.follow_score|round(2) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Điểm số chương:</td>
+                                                <td class="text-end">{{ story.chapter_score|round(2) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Điểm cơ bản:</td>
+                                                <td class="text-end fw-bold">{{ story.base_rating|round(2) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Điểm sentiment:</td>
+                                                <td class="text-end fw-bold">{{ story.sentiment_score|round(2) }}</td>
+                                            </tr>
+                                            <tr class="table-primary">
+                                                <td>Điểm tổng hợp:</td>
+                                                <td class="text-end fw-bold">{{ story.final_rating|round(2) }}</td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-12">
+                                        <h6>Phân tích cảm xúc</h6>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <div class="sentiment-stats">
+                                                    <div class="sentiment-chart-container">
+                                                        <canvas id="sentiment-chart-{{ story.id }}"></canvas>
+                                                    </div>
+                                                    <div class="sentiment-legend mt-2">
+                                                        <div class="sentiment-legend-item">
+                                                            <span class="sentiment-color bg-success"></span>
+                                                            <span>Tích cực: {{ (story.positive_ratio * 100)|round(1) }}%</span>
+                                                        </div>
+                                                        <div class="sentiment-legend-item">
+                                                            <span class="sentiment-color bg-danger"></span>
+                                                            <span>Tiêu cực: {{ (story.negative_ratio * 100)|round(1) }}%</span>
+                                                        </div>
+                                                        <div class="sentiment-legend-item">
+                                                            <span class="sentiment-color bg-secondary"></span>
+                                                            <span>Trung tính: {{ (story.neutral_ratio * 100)|round(1) }}%</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="col-md-8">
+                                                <div class="comments-section">
+                                                    <ul class="nav nav-tabs" role="tablist">
+                                                        <li class="nav-item" role="presentation">
+                                                            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#positive-{{ story.id }}" type="button">
+                                                                <i class="fas fa-thumbs-up text-success me-1"></i>Tích cực
+                                                            </button>
+                                                        </li>
+                                                        <li class="nav-item" role="presentation">
+                                                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#negative-{{ story.id }}" type="button">
+                                                                <i class="fas fa-thumbs-down text-danger me-1"></i>Tiêu cực
+                                                            </button>
+                                                        </li>
+                                                    </ul>
+                                                    
+                                                    <div class="tab-content p-3 border border-top-0 rounded-bottom">
+                                                        <div class="tab-pane fade show active" id="positive-{{ story.id }}">
+                                                            {% if story.top_positive %}
+                                                                <div class="comments-list">
+                                                                    {% for comment in story.top_positive %}
+                                                                        <div class="comment-item">
+                                                                            <div class="comment-header">
+                                                                                <span class="comment-user"><i class="fas fa-user-circle me-1"></i>{{ comment.username }}</span>
+                                                                                <span class="comment-sentiment positive">
+                                                                                    <i class="fas fa-thumbs-up me-1"></i>{{ (comment.sentiment_score * 100)|round }}%
+                                                                                </span>
+                                                                            </div>
+                                                                            <div class="comment-content">{{ comment.content }}</div>
+                                                                        </div>
+                                                                    {% endfor %}
+                                                                </div>
+                                                            {% else %}
+                                                                <div class="text-center py-3 text-muted">
+                                                                    <i class="fas fa-comment-slash fa-2x mb-2"></i>
+                                                                    <p>Không có bình luận tích cực</p>
+                                                                </div>
+                                                            {% endif %}
+                                                        </div>
+                                                        
+                                                        <div class="tab-pane fade" id="negative-{{ story.id }}">
+                                                            {% if story.top_negative %}
+                                                                <div class="comments-list">
+                                                                    {% for comment in story.top_negative %}
+                                                                        <div class="comment-item">
+                                                                            <div class="comment-header">
+                                                                                <span class="comment-user"><i class="fas fa-user-circle me-1"></i>{{ comment.username }}</span>
+                                                                                <span class="comment-sentiment negative">
+                                                                                    <i class="fas fa-thumbs-down me-1"></i>{{ ((1 - comment.sentiment_score) * 100)|round }}%
+                                                                                </span>
+                                                                            </div>
+                                                                            <div class="comment-content">{{ comment.content }}</div>
+                                                                        </div>
+                                                                    {% endfor %}
+                                                                </div>
+                                                            {% else %}
+                                                                <div class="text-center py-3 text-muted">
+                                                                    <i class="fas fa-comment-slash fa-2x mb-2"></i>
+                                                                    <p>Không có bình luận tiêu cực</p>
+                                                                </div>
+                                                            {% endif %}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stat-card {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .stat-number {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #3f51b5;
+    }
+    
+    .stat-label {
+        font-size: 1rem;
+        color: #666;
+    }
+    
+    .chart-container {
+        height: 300px;
+        margin-bottom: 20px;
+    }
+    
+    .story-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .story-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px;
+        background-color: #f8f9fa;
+        cursor: pointer;
+    }
+    
+    .story-info {
+        display: flex;
+        align-items: center;
+        flex: 1;
+    }
+    
+    .story-image {
+        width: 60px;
+        height: 80px;
+        margin-right: 15px;
+        overflow: hidden;
+        border-radius: 4px;
+    }
+    
+    .story-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
+    .no-image {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #eee;
+        color: #aaa;
+        font-size: 1.5rem;
+    }
+    
+    .story-title h5 {
+        margin-bottom: 5px;
+    }
+    
+    .story-meta {
+        font-size: 0.85rem;
+        color: #666;
+    }
+    
+    .meta-item {
+        margin-right: 15px;
+    }
+    
+    .story-rating {
+        text-align: center;
+    }
+    
+    .rating-badge {
+        background-color: #3f51b5;
+        color: white;
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        font-weight: bold;
+        margin: 0 auto;
+    }
+    
+    .rating-text {
+        font-size: 0.8rem;
+        margin-top: 5px;
+    }
+    
+    .story-details {
+        padding: 15px;
+    }
+    
+    .story-genres {
+        margin-top: 5px;
+    }
+    
+    .story-genres .badge {
+        margin-right: 5px;
+        margin-bottom: 5px;
+    }
+    
+    .sentiment-stats {
+        text-align: center;
+    }
+    
+    .sentiment-chart-container {
+        height: 150px;
+    }
+    
+    .sentiment-legend {
+        text-align: left;
+    }
+    
+    .sentiment-legend-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 5px;
+    }
+    
+    .sentiment-color {
+        width: 15px;
+        height: 15px;
+        border-radius: 3px;
+        margin-right: 8px;
+    }
+    
+    .comments-list {
+        max-height: 350px;
+        overflow-y: auto;
+    }
+    
+    .comment-item {
+        border-bottom: 1px solid #eee;
+        padding: 10px 0;
+    }
+    
+    .comment-item:last-child {
+        border-bottom: none;
+    }
+    
+    .comment-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+    }
+    
+    .comment-user {
+        font-weight: bold;
+    }
+    
+    .comment-sentiment {
+        font-size: 0.85rem;
+        padding: 2px 6px;
+        border-radius: 10px;
+    }
+    
+    .comment-sentiment.positive {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    
+    .comment-sentiment.negative {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .comment-content {
+        font-size: 0.95rem;
+        color: #444;
+    }
+</style>
+{% endblock %}
+
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Dữ liệu cho biểu đồ tổng quan
+        const stories = {{ stories|map(attribute='title')|list|tojson|safe }};
+        const ratings = {{ stories|map(attribute='final_rating')|list|tojson|safe }};
+        const baseRatings = {{ stories|map(attribute='base_rating')|list|tojson|safe }};
+        const sentimentRatings = {{ stories|map(attribute='sentiment_score')|list|tojson|safe }};
+        
+        // Vẽ biểu đồ đánh giá
+        const ratingChart = new Chart(document.getElementById('ratingChart'), {
+            type: 'bar',
+            data: {
+                labels: stories,
+                datasets: [
+                    {
+                        label: 'Điểm cơ bản',
+                        data: baseRatings,
+                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Điểm sentiment',
+                        data: sentimentRatings,
+                        backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Điểm tổng hợp',
+                        data: ratings,
+                        backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 10,
+                        title: {
+                            display: true,
+                            text: 'Điểm đánh giá (0-10)'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Truyện'
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'So sánh điểm đánh giá các truyện'
+                    }
+                }
+            }
+        });
+        
+        // Dữ liệu cho biểu đồ sentiment
+        const positiveRatios = {{ stories|map(attribute='positive_ratio')|map('multiply', 100)|list|tojson|safe }};
+        const negativeRatios = {{ stories|map(attribute='negative_ratio')|map('multiply', 100)|list|tojson|safe }};
+        const neutralRatios = {{ stories|map(attribute='neutral_ratio')|map('multiply', 100)|list|tojson|safe }};
+        
+        // Vẽ biểu đồ sentiment
+        const sentimentChart = new Chart(document.getElementById('sentimentChart'), {
+            type: 'bar',
+            data: {
+                labels: stories,
+                datasets: [
+                    {
+                        label: 'Tích cực',
+                        data: positiveRatios,
+                        backgroundColor: 'rgba(40, 167, 69, 0.7)',
+                        borderColor: 'rgba(40, 167, 69, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Tiêu cực',
+                        data: negativeRatios,
+                        backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                        borderColor: 'rgba(220, 53, 69, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Trung tính',
+                        data: neutralRatios,
+                        backgroundColor: 'rgba(108, 117, 125, 0.7)',
+                        borderColor: 'rgba(108, 117, 125, 1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        title: {
+                            display: true,
+                            text: 'Tỷ lệ cảm xúc (%)'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Truyện'
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Phân tích cảm xúc bình luận'
+                    }
+                }
+            }
+        });
+        
+        // Vẽ biểu đồ sentiment cho từng truyện
+        {% for story in stories %}
+            new Chart(document.getElementById('sentiment-chart-{{ story.id }}'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Tích cực', 'Tiêu cực', 'Trung tính'],
+                    datasets: [{
+                        data: [
+                            {{ story.positive_ratio * 100 }},
+                            {{ story.negative_ratio * 100 }},
+                            {{ story.neutral_ratio * 100 }}
+                        ],
+                        backgroundColor: [
+                            'rgba(40, 167, 69, 0.7)',
+                            'rgba(220, 53, 69, 0.7)',
+                            'rgba(108, 117, 125, 0.7)'
+                        ],
+                        borderColor: [
+                            'rgba(40, 167, 69, 1)',
+                            'rgba(220, 53, 69, 1)',
+                            'rgba(108, 117, 125, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        {% endfor %}
+        
+        // Xử lý đóng/mở card truyện
+        const storyHeaders = document.querySelectorAll('.story-header');
+        storyHeaders.forEach(header => {
+            header.addEventListener('click', function() {
+                const detailsId = this.getAttribute('data-bs-target');
+                const details = document.querySelector(detailsId);
+                
+                // Toggle nút mũi tên
+                if (details.classList.contains('show')) {
+                    this.querySelector('.toggle-icon').classList.remove('fa-chevron-up');
+                    this.querySelector('.toggle-icon').classList.add('fa-chevron-down');
+                } else {
+                    this.querySelector('.toggle-icon').classList.remove('fa-chevron-down');
+                    this.querySelector('.toggle-icon').classList.add('fa-chevron-up');
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+# Web Framework
+flask==2.2.3
+flask-socketio==5.3.2
+gunicorn==20.1.0
+flask-sqlalchemy==3.0.3
+
+# Database
+sqlalchemy==2.0.7
+alembic==1.10.2
+
+# Frontend
+jinja2==3.1.2
+bootstrap-flask==2.2.0
+
+# Data Processing
+pandas==1.5.3
+numpy==1.24.2
+openpyxl==3.1.2
+
+# Web Crawling
+selenium==4.8.3
+webdriver-manager==3.8.5
+beautifulsoup4==4.12.0
+requests==2.28.2
+
+# NLP & ML
+torch==2.0.0
+transformers==4.27.2
+
+# Utilities
+python-dotenv==1.0.0
+tqdm==4.65.0
