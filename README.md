@@ -1,0 +1,2 @@
+# RatingComic
+Rating Comic
