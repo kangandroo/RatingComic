@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QPushButton, QProgressBar, QSpacerItem,
-                            QSizePolicy, QGroupBox, QFormLayout)
+                            QSizePolicy, QGroupBox, QFormLayout, QSpinBox,
+                            QCheckBox)
 from PyQt6.QtCore import pyqtSignal, QThreadPool
 import logging
 
@@ -59,12 +60,26 @@ class WebsiteSelectionTab(QWidget):
         config_group = QGroupBox("Cấu hình crawl")
         config_layout = QFormLayout(config_group)
         
-        # Số trang tối đa
-        self.max_pages_combo = QComboBox()
-        for pages in [10, 20, 50, 100, "Tất cả"]:
-            self.max_pages_combo.addItem(str(pages))
+        # Thay ComboBox bằng SpinBox để nhập số trang
+        self.max_pages_spin = QSpinBox()
+        self.max_pages_spin.setRange(1, 1000)  # Cho phép nhập từ 1-1000 trang
+        self.max_pages_spin.setValue(10)  # Giá trị mặc định
+        self.max_pages_spin.setSuffix(" trang")  # Thêm đơn vị
         
-        config_layout.addRow("Số trang tối đa:", self.max_pages_combo)
+        # Thêm CheckBox cho phép crawl tất cả các trang
+        self.all_pages_check = QCheckBox("Crawl tất cả các trang có thể")
+        self.all_pages_check.stateChanged.connect(self.toggle_all_pages)
+        
+        config_layout.addRow("Số trang tối đa:", self.max_pages_spin)
+        config_layout.addRow("", self.all_pages_check)
+        
+        # Thêm tùy chọn số worker
+        self.worker_count_spin = QSpinBox()
+        self.worker_count_spin.setRange(1, 10)
+        self.worker_count_spin.setValue(5)
+        self.worker_count_spin.setSuffix(" luồng")
+        
+        config_layout.addRow("Số luồng xử lý:", self.worker_count_spin)
         
         main_layout.addWidget(config_group)
         
@@ -92,6 +107,10 @@ class WebsiteSelectionTab(QWidget):
         
         main_layout.addLayout(button_layout)
     
+    def toggle_all_pages(self, state):
+        """Bật/Tắt SpinBox khi chọn crawl tất cả các trang"""
+        self.max_pages_spin.setEnabled(not state)
+    
     def on_website_changed(self, index):
         website_name = self.website_combo.currentText()
         self.url_label.setText(self.supported_websites[website_name])
@@ -111,20 +130,29 @@ class WebsiteSelectionTab(QWidget):
         website_name = self.website_combo.currentText()
         website_url = self.supported_websites[website_name]
         
-        max_pages = self.max_pages_combo.currentText()
-        if max_pages == "Tất cả":
-            max_pages = None
-        else:
-            max_pages = int(max_pages)
+        # Xác định số trang tối đa
+        max_pages = None
+        if not self.all_pages_check.isChecked():
+            max_pages = self.max_pages_spin.value()
+        
+        # Lấy số worker
+        worker_count = self.worker_count_spin.value()
         
         logger.info(f"Bắt đầu crawl từ {website_name} ({website_url})")
+        if max_pages:
+            logger.info(f"Giới hạn số trang: {max_pages}")
+        else:
+            logger.info("Không giới hạn số trang, sẽ crawl tất cả")
+        
+        logger.info(f"Số luồng xử lý: {worker_count}")
         
         # Tạo crawler thông qua factory
         crawler = CrawlerFactory.create_crawler(
             website_name, 
             self.db_manager,
             base_url=website_url,
-            max_pages=max_pages
+            max_pages=max_pages,
+            worker_count=worker_count
         )
         
         # Tạo worker để chạy trong thread riêng
