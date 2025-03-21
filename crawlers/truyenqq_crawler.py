@@ -295,69 +295,131 @@ class TruyenQQCrawler(BaseCrawler):
         
         try:
             comic_url = comic.get("link_truyen")
+            if not comic_url:
+                logger.error(f"Không tìm thấy link truyện cho: {comic['ten_truyen']}")
+                return []
+                
             logger.info(f"Đang crawl comment cho truyện: {comic['ten_truyen']}")
+            logger.info(f"URL: {comic_url}")
             
+            # Khởi tạo WebDriver
             driver = self.create_chrome_driver()
-            driver.get(comic_url)
-            time.sleep(random.uniform(1, 2))
+            
+            # Thử truy cập URL
+            try:
+                driver.get(comic_url)
+                logger.info(f"Đã truy cập thành công URL: {comic_url}")
+            except Exception as e:
+                logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
+                return []
+                
+            time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
+            
+            # Kiểm tra xem trang có tồn tại không
+            if "Page not found" in driver.title or "404" in driver.title:
+                logger.error(f"Trang không tồn tại: {comic_url}")
+                return []
+            
+            # In source HTML cho debug
+            html_length = len(driver.page_source)
+            logger.info(f"Đã tải trang HTML (độ dài: {html_length} ký tự)")
             
             # Lặp qua các trang comment
             page_comment = 1
-            while True:
+            max_pages = 10  # Giới hạn số trang để tránh treo
+            while page_comment <= max_pages:
                 try:
+                    # Debug thông tin trang hiện tại
+                    logger.info(f"Đang tải comment trang {page_comment}...")
+                    
+                    # Kiểm tra xem có hàm loadComment không
+                    has_load_comment = driver.execute_script("return typeof loadComment === 'function'")
+                    if not has_load_comment:
+                        logger.warning("Hàm loadComment không tồn tại trên trang")
+                        break
+                    
                     # Gọi hàm loadComment để tải comment trang tiếp theo
-                    driver.execute_script(
-                        "if (typeof loadComment === 'function') { loadComment(arguments[0]); } else { throw 'loadComment not found'; }", 
-                        page_comment
-                    )
-                except Exception:
-                    break
-                    
-                time.sleep(random.uniform(1, 2))
-                
-                # Đợi để comment được tải
-                try:
-                    comments = WebDriverWait(driver, 5).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment"))
-                    )
-                except:
-                    break
-                    
-                if not comments:
-                    break
-                    
-                # Xử lý từng comment
-                for comment in comments:
-                    name = self.get_text_safe(comment, "div.outsite-comment div.outline-content-comment div:nth-child(1) strong")
-                    content = self.get_text_safe(comment, "div.outsite-comment div.outline-content-comment div.content-comment")
-                    
-                    # Đảm bảo nội dung bình luận không để trống
-                    if not content or content.strip() == "":
-                        content = "N/A"
+                    try:
+                        driver.execute_script("loadComment(arguments[0]);", page_comment)
+                        logger.info(f"Đã gọi hàm loadComment({page_comment})")
+                    except Exception as e:
+                        logger.error(f"Lỗi khi gọi hàm loadComment: {str(e)}")
+                        break
                         
-                    # Đảm bảo tên người bình luận không để trống
-                    if not name or name.strip() == "":
-                        name = "N/A"
+                    time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
                     
-                    comment_data = {
-                        "ten_nguoi_binh_luan": name,
-                        "noi_dung": content,
-                        "story_id": comic.get("id")
-                    }
+                    # Đợi để comment được tải
+                    try:
+                        comment_elements = WebDriverWait(driver, 5).until(
+                            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment"))
+                        )
+                        logger.info(f"Tìm thấy {len(comment_elements)} comment trên trang {page_comment}")
+                    except Exception as e:
+                        logger.warning(f"Không thể tìm thấy comment trên trang {page_comment}: {str(e)}")
+                        break
+                        
+                    # Kiểm tra xem có comment không
+                    comment_elements = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
+                    if not comment_elements:
+                        logger.info(f"Không tìm thấy comment nào trên trang {page_comment}")
+                        break
+                        
+                    # Xử lý từng comment
+                    new_comments_found = 0
+                    for comment_elem in comment_elements:
+                        try:
+                            # Thử dùng JavaScript để lấy thông tin
+                            name = driver.execute_script("""
+                                return arguments[0].querySelector('div.outsite-comment div.outline-content-comment div:nth-child(1) strong')?.innerText || "N/A";
+                            """, comment_elem)
+                            
+                            content = driver.execute_script("""
+                                return arguments[0].querySelector('div.outsite-comment div.outline-content-comment div.content-comment')?.innerText || "N/A";
+                            """, comment_elem)
+                            
+                            # Đảm bảo nội dung bình luận không để trống
+                            if not content or content.strip() == "":
+                                content = "N/A"
+                                
+                            # Đảm bảo tên người bình luận không để trống
+                            if not name or name.strip() == "":
+                                name = "N/A"
+                            
+                            # Tạo đối tượng comment
+                            comment_data = {
+                                "ten_nguoi_binh_luan": name,
+                                "noi_dung": content,
+                                "story_id": comic.get("id")
+                            }
+                            
+                            # Kiểm tra trùng lặp trước khi thêm
+                            is_duplicate = False
+                            for existing in all_comments:
+                                if (existing["ten_nguoi_binh_luan"] == name and 
+                                    existing["noi_dung"] == content):
+                                    is_duplicate = True
+                                    break
+                            
+                            if not is_duplicate:
+                                all_comments.append(comment_data)
+                                new_comments_found += 1
+                                
+                        except Exception as e:
+                            logger.error(f"Lỗi khi xử lý comment: {str(e)}")
                     
-                    # Kiểm tra trùng lặp trước khi thêm
-                    is_duplicate = False
-                    for existing in all_comments:
-                        if (existing["ten_nguoi_binh_luan"] == name and 
-                            existing["noi_dung"] == content):
-                            is_duplicate = True
-                            break
+                    logger.info(f"Đã thêm {new_comments_found} comment mới từ trang {page_comment}")
                     
-                    if not is_duplicate:
-                        all_comments.append(comment_data)
-                
-                # Chuyển đến trang tiếp theo
-                page_comment += 1
+                    # Nếu không có comment mới nào được thêm, dừng lại
+                    if new_comments_found == 0:
+                        logger.info(f"Không tìm thấy comment mới nào trên trang {page_comment}")
+                        break
+                    
+                    # Chuyển đến trang tiếp theo
+                    page_comment += 1
+                    
+                except Exception as e:
+                    logger.error(f"Lỗi khi xử lý trang comment {page_comment}: {str(e)}")
+                    break
             
             logger.info(f"Đã crawl được {len(all_comments)} comment cho truyện: {comic['ten_truyen']}")
             

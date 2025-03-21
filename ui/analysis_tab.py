@@ -195,10 +195,11 @@ class DetailAnalysisTab(QWidget):
                     total = len(comments)
                     positive_ratio = positive / total if total > 0 else 0
                     negative_ratio = negative / total if total > 0 else 0
+                    neutral_ratio = neutral / total if total > 0 else 0
                     
                     # Công thức tính điểm sentiment (0-10)
-                    sentiment_rating = (positive_ratio * 10) - (negative_ratio * 5)
-                    sentiment_rating = max(0, min(10, sentiment_rating))
+                    sentiment_rating = (positive_ratio * 8) - (negative_ratio * 5) + (neutral_ratio * 5)
+                    sentiment_rating = max(0, min(10, sentiment_rating + 5))  
                     
                 else:
                     sentiment_rating = 5  # Điểm mặc định nếu không có comment
