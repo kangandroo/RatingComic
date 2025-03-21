@@ -1,162 +1,374 @@
-import os
 import sqlite3
-import json
-from flask import current_app
-from contextlib import contextmanager
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+import logging
+import os
+import pandas as pd
+from datetime import datetime
 
-# Import logger
-from utils.logger import default_logger as logger
-
-# Import instance SQLAlchemy đã tồn tại
-from db.models import db, StoryBaseModel
+logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Quản lý kết nối đến các database tách biệt cho mỗi truyện"""
+    """Quản lý cơ sở dữ liệu SQLite"""
     
-    def __init__(self, app=None):
-        self.app = app
-        self.story_db_dir = None
-        self.master_db = None
+    def __init__(self, db_file):
+        """
+        Khởi tạo DatabaseManager
         
-        if app is not None:
-            self.init_app(app)
+        Args:
+            db_file: Đường dẫn đến file SQLite
+        """
+        self.db_file = db_file
     
-    def init_app(self, app):
-        """Khởi tạo với Flask app"""
-        self.app = app
-        self.story_db_dir = app.config.get('STORY_DB_DIR', 'databases/stories')
-        
-        # Sử dụng instance SQLAlchemy đã tồn tại thay vì tạo mới
-        self.master_db = db
-        
-        # Tạo thư mục database nếu chưa tồn tại
-        os.makedirs(self.story_db_dir, exist_ok=True)
+    def get_connection(self):
+        """Lấy kết nối đến database"""
+        return sqlite3.connect(self.db_file)
     
-    def get_story_db_path(self, story_id):
-        """Lấy đường dẫn đến file database của truyện"""
-        return os.path.join(self.db_dir, f"story_{story_id}.db")
-    
-    def create_story_db(self, story_id):
-        """Tạo database mới cho truyện"""
-        from db.models import StoryIndex
-        
-        # Lấy thông tin truyện từ database chính
-        story_index = StoryIndex.query.get(story_id)
-        if not story_index:
-            raise ValueError(f"Không tìm thấy truyện với ID {story_id}")
-        
-        # Tạo đường dẫn file database
-        db_path = self.get_story_db_path(story_id)
-        
-        # Tạo URI SQLite
-        db_uri = f"sqlite:///{db_path}"
-        
-        # Tạo database và các bảng
-        engine = create_engine(db_uri)
-        temp_db = SQLAlchemy(metadata=SQLAlchemy.Metadata())
-        temp_db.Model.metadata.bind = engine
-        
-        # Lấy các models
-        models = StoryBaseModel.get_story_models(temp_db)
-        
-        # Tạo tất cả bảng
-        temp_db.Model.metadata.create_all(engine)
-        
-        # Cập nhật đường dẫn trong story_index
-        story_index.db_path = db_path
-        self.master_db.session.commit()
-        
-        # Tối ưu database
-        self.optimize_sqlite_db(db_path)
-        
-        logger.info(f"Đã tạo database riêng cho truyện ID {story_id}: {db_path}")
-        return db_path
-    
-    @contextmanager
-    def story_db_session(self, story_id):
-        """Context manager để làm việc với database của truyện"""
-        from db.models import StoryIndex
-        
-        # Lấy thông tin truyện từ database chính
-        story_index = StoryIndex.query.get(story_id)
-        if not story_index:
-            raise ValueError(f"Không tìm thấy truyện với ID {story_id}")
-        
-        # Nếu chưa có database, tạo mới
-        if not story_index.db_path or not os.path.exists(story_index.db_path):
-            self.create_story_db(story_id)
-            # Reload story_index
-            story_index = StoryIndex.query.get(story_id)
-        
-        # Tạo engine và session
-        engine = create_engine(f"sqlite:///{story_index.db_path}")
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        
+    def setup_database(self):
+        """Thiết lập cấu trúc database ban đầu"""
         try:
-            # Lấy models
-            temp_db = SQLAlchemy(metadata=SQLAlchemy.Metadata())
-            temp_db.Model.metadata.bind = engine
-            models = StoryBaseModel.get_story_models(temp_db)
-            
-            # Trả về session và models
-            yield session, models
-        finally:
-            session.close()
-    
-    def optimize_sqlite_db(self, db_path):
-        """Tối ưu hóa database SQLite"""
-        try:
-            conn = sqlite3.connect(db_path)
+            conn = self.get_connection()
             cursor = conn.cursor()
             
-            # Bật ràng buộc khóa ngoại
-            cursor.execute("PRAGMA foreign_keys=ON")
+            # Tạo bảng comics
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ten_truyen TEXT NOT NULL,
+                ten_khac TEXT,
+                tac_gia TEXT,
+                trang_thai TEXT,
+                the_loai TEXT,
+                luot_xem INTEGER DEFAULT 0,
+                luot_thich INTEGER DEFAULT 0,
+                luot_theo_doi INTEGER DEFAULT 0,
+                link_truyen TEXT UNIQUE,
+                mo_ta TEXT,
+                so_chuong INTEGER DEFAULT 0,
+                so_binh_luan INTEGER DEFAULT 0,
+                nguon TEXT,
+                ngay_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
             
-            # Tối ưu cấu hình
-            cursor.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=5000")
-            cursor.execute("PRAGMA temp_store=MEMORY")
-            cursor.execute("PRAGMA locking_mode=EXCLUSIVE")
+            # Tạo bảng comments
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comic_id INTEGER,
+                ten_nguoi_binh_luan TEXT,
+                noi_dung TEXT,
+                sentiment TEXT,
+                sentiment_score REAL DEFAULT 0.5,
+                FOREIGN KEY (comic_id) REFERENCES comics (id)
+            )
+            ''')
             
-            # Tạo indexes
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_sentiment ON comments(sentiment)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_number ON chapters(number)")
+            conn.commit()
+            conn.close()
             
-            # Vacuum để tối ưu kích thước
-            cursor.execute("VACUUM")
+            logger.info("Đã thiết lập cấu trúc database")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi thiết lập database: {str(e)}")
+    
+    def clear_comics_data(self):
+        """Xóa tất cả dữ liệu trong database"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM comments")
+            cursor.execute("DELETE FROM comics")
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info("Đã xóa tất cả dữ liệu cũ")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi xóa dữ liệu: {str(e)}")
+    
+    def save_comic(self, comic_data):
+        """
+        Lưu thông tin truyện vào database
+        
+        Args:
+            comic_data: Dict chứa thông tin truyện
+            
+        Returns:
+            ID của truyện trong database
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Kiểm tra xem đã tồn tại chưa
+            cursor.execute(
+                "SELECT id FROM comics WHERE link_truyen = ?", 
+                (comic_data.get("link_truyen"),)
+            )
+            
+            result = cursor.fetchone()
+            
+            if result:
+                # Cập nhật nếu đã tồn tại
+                comic_id = result[0]
+                
+                cursor.execute('''
+                UPDATE comics SET
+                    ten_truyen = ?,
+                    ten_khac = ?,
+                    tac_gia = ?,
+                    trang_thai = ?,
+                    the_loai = ?,
+                    luot_xem = ?,
+                    luot_thich = ?,
+                    luot_theo_doi = ?,
+                    mo_ta = ?,
+                    so_chuong = ?,
+                    so_binh_luan = ?,
+                    ngay_cap_nhat = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''', (
+                    comic_data.get("ten_truyen"),
+                    comic_data.get("ten_khac"),
+                    comic_data.get("tac_gia"),
+                    comic_data.get("trang_thai"),
+                    comic_data.get("the_loai"),
+                    comic_data.get("luot_xem"),
+                    comic_data.get("luot_thich"),
+                    comic_data.get("luot_theo_doi"),
+                    comic_data.get("mo_ta"),
+                    comic_data.get("so_chuong"),
+                    comic_data.get("so_binh_luan"),
+                    comic_id
+                ))
+                
+                logger.debug(f"Đã cập nhật truyện: {comic_data.get('ten_truyen')}")
+                
+            else:
+                # Thêm mới nếu chưa tồn tại
+                cursor.execute('''
+                INSERT INTO comics (
+                    ten_truyen, ten_khac, tac_gia, trang_thai, the_loai,
+                    luot_xem, luot_thich, luot_theo_doi, link_truyen,
+                    mo_ta, so_chuong, so_binh_luan, nguon
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    comic_data.get("ten_truyen"),
+                    comic_data.get("ten_khac"),
+                    comic_data.get("tac_gia"),
+                    comic_data.get("trang_thai"),
+                    comic_data.get("the_loai"),
+                    comic_data.get("luot_xem"),
+                    comic_data.get("luot_thich"),
+                    comic_data.get("luot_theo_doi"),
+                    comic_data.get("link_truyen"),
+                    comic_data.get("mo_ta"),
+                    comic_data.get("so_chuong"),
+                    comic_data.get("so_binh_luan"),
+                    comic_data.get("nguon")
+                ))
+                
+                comic_id = cursor.lastrowid
+                logger.debug(f"Đã thêm truyện mới: {comic_data.get('ten_truyen')}")
+            
+            conn.commit()
+            conn.close()
+            
+            return comic_id
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu truyện: {str(e)}")
+            return None
+    
+    def save_comments(self, comic_id, comments):
+        """
+        Lưu comment vào database
+        
+        Args:
+            comic_id: ID của truyện trong database
+            comments: List các comment
+        """
+        if not comments:
+            return
+        
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Xóa comment cũ
+            cursor.execute("DELETE FROM comments WHERE comic_id = ?", (comic_id,))
+            
+            # Thêm comment mới
+            for comment in comments:
+                cursor.execute('''
+                INSERT INTO comments (
+                    comic_id, ten_nguoi_binh_luan, noi_dung, sentiment, sentiment_score
+                ) VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    comic_id,
+                    comment.get("ten_nguoi_binh_luan"),
+                    comment.get("noi_dung"),
+                    comment.get("sentiment", "neutral"),
+                    comment.get("sentiment_score", 0.5)
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Đã lưu {len(comments)} comment cho truyện ID: {comic_id}")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu comment: {str(e)}")
+    
+    def get_all_comics(self):
+        """
+        Lấy tất cả truyện từ database
+        
+        Returns:
+            List các truyện
+        """
+        try:
+            conn = self.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT * FROM comics ORDER BY ten_truyen
+            """)
+            
+            rows = cursor.fetchall()
+            
+            # Chuyển từ Row object sang dict
+            comics = [dict(row) for row in rows]
             
             conn.close()
-            logger.info(f"Đã tối ưu hóa database: {db_path}")
-            return True
+            
+            return comics
+            
         except Exception as e:
-            logger.error(f"Lỗi khi tối ưu database {db_path}: {str(e)}")
-            return False
+            logger.error(f"Lỗi khi lấy danh sách truyện: {str(e)}")
+            return []
     
-    def backup_story_db(self, story_id, backup_dir='backups/stories'):
-        """Sao lưu database của một truyện"""
-        import shutil
-        from datetime import datetime
+    def get_all_genres(self):
+        """
+        Lấy tất cả thể loại từ database
         
-        # Tạo thư mục backup
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+        Returns:
+            List các thể loại
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT DISTINCT the_loai FROM comics
+            """)
+            
+            rows = cursor.fetchall()
+            
+            # Tách thể loại ra từ chuỗi
+            genres = set()
+            for row in rows:
+                if row[0]:
+                    genre_list = [g.strip() for g in row[0].split(",")]
+                    genres.update(genre_list)
+            
+            conn.close()
+            
+            # Sắp xếp và loại bỏ giá trị 'N/A'
+            return sorted([g for g in genres if g and g != "N/A"])
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy danh sách thể loại: {str(e)}")
+            return []
+    
+    def get_comic_comments(self, comic_id):
+        """
+        Lấy tất cả comment của một truyện
         
-        # Lấy đường dẫn database
-        db_path = self.get_story_db_path(story_id)
-        if not os.path.exists(db_path):
-            logger.error(f"Không tìm thấy database truyện ID {story_id}")
-            return None
+        Args:
+            comic_id: ID của truyện
+            
+        Returns:
+            List các comment
+        """
+        try:
+            conn = self.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT * FROM comments WHERE comic_id = ? ORDER BY id
+            """, (comic_id,))
+            
+            rows = cursor.fetchall()
+            
+            # Chuyển từ Row object sang dict
+            comments = [dict(row) for row in rows]
+            
+            conn.close()
+            
+            return comments
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy comment của truyện ID {comic_id}: {str(e)}")
+            return []
+    
+    def export_results_to_excel(self, analysis_results, filename):
+        """
+        Xuất kết quả phân tích ra file Excel
         
-        # Tạo tên file backup
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"story_{story_id}_{timestamp}.db")
-        
-        # Sao chép file
-        shutil.copy2(db_path, backup_path)
-        logger.info(f"Đã sao lưu database truyện ID {story_id}: {backup_path}")
-        
-        return backup_path
+        Args:
+            analysis_results: Kết quả phân tích
+            filename: Tên file xuất
+        """
+        try:
+            # Tạo DataFrame cho truyện
+            comics_data = []
+            
+            for i, comic in enumerate(analysis_results):
+                comics_data.append({
+                    "Xếp hạng": i + 1,
+                    "Tên truyện": comic["ten_truyen"],
+                    "Tên khác": comic["ten_khac"],
+                    "Tác giả": comic["tac_gia"],
+                    "Thể loại": comic["the_loai"],
+                    "Trạng thái": comic["trang_thai"],
+                    "Số chương": comic["so_chuong"],
+                    "Lượt xem": comic["luot_xem"],
+                    "Lượt thích": comic["luot_thich"],
+                    "Lượt theo dõi": comic["luot_theo_doi"],
+                    "Điểm cơ bản": round(comic.get("base_rating", 0), 2),
+                    "Điểm sentiment": round(comic.get("sentiment_rating", 0), 2),
+                    "Điểm tổng hợp": round(comic.get("comprehensive_rating", 0), 2)
+                })
+            
+            comics_df = pd.DataFrame(comics_data)
+            
+            # Tạo DataFrame cho comment
+            comments_data = []
+            
+            for comic in analysis_results:
+                comic_comments = comic.get("comments", [])
+                
+                for comment in comic_comments:
+                    comments_data.append({
+                        "Tên truyện": comic["ten_truyen"],
+                        "Người bình luận": comment["ten_nguoi_binh_luan"],
+                        "Nội dung bình luận": comment["noi_dung"],
+                        "Cảm xúc": comment["sentiment"],
+                        "Điểm cảm xúc": round(comment["sentiment_score"], 2)
+                    })
+            
+            comments_df = pd.DataFrame(comments_data)
+            
+            # Tạo Excel writer
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                comics_df.to_excel(writer, sheet_name="Đánh giá truyện", index=False)
+                comments_df.to_excel(writer, sheet_name="Chi tiết bình luận", index=False)
+            
+            logger.info(f"Đã xuất kết quả ra file: {filename}")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi xuất kết quả ra Excel: {str(e)}")
