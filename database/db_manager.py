@@ -2,25 +2,23 @@ import os
 import sqlite3
 import json
 from flask import current_app
-from flask_sqlalchemy import SQLAlchemy
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from db.models import StoryBaseModel
+# Import logger
 from utils.logger import default_logger as logger
 
+# Import instance SQLAlchemy đã tồn tại
+from db.models import db, StoryBaseModel
+
 class DatabaseManager:
-    """Quản lý nhiều database cho từng truyện"""
+    """Quản lý kết nối đến các database tách biệt cho mỗi truyện"""
     
-    def __init__(self, app=None, db_dir='databases/stories'):
+    def __init__(self, app=None):
         self.app = app
-        self.db_dir = db_dir
+        self.story_db_dir = None
         self.master_db = None
-        
-        # Tạo thư mục databases nếu chưa tồn tại
-        if not os.path.exists(db_dir):
-            os.makedirs(db_dir)
         
         if app is not None:
             self.init_app(app)
@@ -28,14 +26,13 @@ class DatabaseManager:
     def init_app(self, app):
         """Khởi tạo với Flask app"""
         self.app = app
-        self.db_dir = app.config.get('STORY_DB_DIR', 'databases/stories')
+        self.story_db_dir = app.config.get('STORY_DB_DIR', 'databases/stories')
         
-        # Đảm bảo thư mục tồn tại
-        if not os.path.exists(self.db_dir):
-            os.makedirs(self.db_dir)
+        # Sử dụng instance SQLAlchemy đã tồn tại thay vì tạo mới
+        self.master_db = db
         
-        # Thiết lập database chính 
-        self.master_db = SQLAlchemy(app)
+        # Tạo thư mục database nếu chưa tồn tại
+        os.makedirs(self.story_db_dir, exist_ok=True)
     
     def get_story_db_path(self, story_id):
         """Lấy đường dẫn đến file database của truyện"""

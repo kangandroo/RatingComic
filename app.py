@@ -1,27 +1,19 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, send_from_directory
-from flask_socketio import SocketIO, emit
+# Thực hiện monkey patching TRƯỚC bất kỳ import nào khác
+import eventlet
+eventlet.monkey_patch()
+
+# Sau đó import các module chuẩn
 import os
 import json
 import time
 from datetime import datetime
 import threading
-import eventlet
 
-# Sử dụng eventlet để tăng hiệu suất cho Flask-SocketIO
-eventlet.monkey_patch()
+# Import Flask và SocketIO
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, send_from_directory
+from flask_socketio import SocketIO, emit
 
-# Import các modules
-from db.models import db, Website, StoryIndex, AnalysisReport
-from database.db_manager import DatabaseManager
-from database.operations import DatabaseOperations
-from crawlers.nettruyen import NetTruyenCrawler
-from crawlers.base_crawler import BaseCrawler  
-from analyzers.sentiment import SentimentAnalyzer
-from analyzers.rating import ComicRatingCalculator
-from utils.logger import default_logger as logger
-from utils.logger import crawler_logger, analyzer_logger
-
-# Khởi tạo Flask app
+# Khởi tạo Flask app trước khi import các module khác sử dụng app
 app = Flask(__name__)
 app.config.from_object('config.Config')
 app.secret_key = app.config['SECRET_KEY']
@@ -32,6 +24,24 @@ app.config['STORY_DB_DIR'] = os.environ.get('STORY_DB_DIR', 'databases/stories')
 # Khởi tạo SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
+# Tạo thư mục cần thiết
+os.makedirs(app.config.get('UPLOAD_FOLDER', 'uploads'), exist_ok=True)
+os.makedirs(app.config.get('EXPORT_FOLDER', 'exports'), exist_ok=True)
+os.makedirs(app.config.get('STORY_DB_DIR', 'databases/stories'), exist_ok=True)
+
+# Import các module khác sau khi đã thiết lập app
+from utils.logger import default_logger as logger
+from utils.logger import crawler_logger, analyzer_logger
+
+# Import các module DB 
+from db.models import db, Website, StoryIndex, AnalysisReport
+from database.db_manager import DatabaseManager
+from database.operations import DatabaseOperations
+from crawlers.nettruyen import NetTruyenCrawler
+from crawlers.base_crawler import BaseCrawler  # Chỉ dùng cho typing
+from analyzers.sentiment import SentimentAnalyzer
+from analyzers.rating import ComicRatingCalculator
+
 # Khởi tạo database master
 db.init_app(app)
 
@@ -40,11 +50,6 @@ db_manager = DatabaseManager(app)
 
 # Khởi tạo operations
 db_ops = DatabaseOperations(app, db_manager)
-
-# Tạo thư mục cần thiết
-os.makedirs(app.config.get('UPLOAD_FOLDER', 'uploads'), exist_ok=True)
-os.makedirs(app.config.get('EXPORT_FOLDER', 'exports'), exist_ok=True)
-os.makedirs(app.config.get('STORY_DB_DIR', 'databases/stories'), exist_ok=True)
 
 # Background task flag
 background_tasks = {}
@@ -57,34 +62,34 @@ def emit_log(message, room=None):
     }
     socketio.emit('log_message', data, room=room)
 
-@app.before_first_request
-def create_tables():
-    """Tạo bảng và dữ liệu ban đầu"""
-    with app.app_context():
-        # Tạo tất cả bảng
-        db.create_all()
+# @app._got_first_request
+# def create_tables():
+#     """Tạo bảng và dữ liệu ban đầu"""
+#     with app.app_context():
+#         # Tạo tất cả bảng
+#         db.create_all()
         
-        # Kiểm tra và thêm thông tin website nếu chưa có
-        if Website.query.count() == 0:
-            websites = [
-                {"name": "NetTruyen", "url": "https://nettruyenvie.com", "api_name": "nettruyen"},
-                {"name": "TruyenQQ", "url": "https://truyenqqto.com", "api_name": "truyenqq"},
-                {"name": "ManhuaVN", "url": "https://manhuavn.top", "api_name": "manhuavn"}
-            ]
+#         # Kiểm tra và thêm thông tin website nếu chưa có
+#         if Website.query.count() == 0:
+#             websites = [
+#                 {"name": "NetTruyen", "url": "https://nettruyenvie.com", "api_name": "nettruyen"},
+#                 {"name": "TruyenQQ", "url": "https://truyenqqto.com", "api_name": "truyenqq"},
+#                 {"name": "ManhuaVN", "url": "https://manhuavn.top", "api_name": "manhuavn"}
+#             ]
             
-            for site_data in websites:
-                website = Website(
-                    name=site_data["name"],
-                    url=site_data["url"],
-                    api_name=site_data["api_name"]
-                )
-                db.session.add(website)
+#             for site_data in websites:
+#                 website = Website(
+#                     name=site_data["name"],
+#                     url=site_data["url"],
+#                     api_name=site_data["api_name"]
+#                 )
+#                 db.session.add(website)
                 
-            # Kích hoạt ràng buộc khóa ngoại cho SQLite
-            db.session.execute("PRAGMA foreign_keys=ON")
+#             # Kích hoạt ràng buộc khóa ngoại cho SQLite
+#             db.session.execute("PRAGMA foreign_keys=ON")
                 
-            db.session.commit()
-            logger.info("Đã khởi tạo dữ liệu website")
+#             db.session.commit()
+#             logger.info("Đã khởi tạo dữ liệu website")
 
 def get_crawler(source):
     """Lấy crawler tương ứng với nguồn"""
@@ -499,10 +504,49 @@ def get_task_status(task_id):
     task_info = background_tasks.get(task_id, {})
     return jsonify(task_info)
 
+# Hàm khởi tạo database và dữ liệu ban đầu
+def init_database():
+    """Tạo bảng và dữ liệu ban đầu"""
+    # Tạo tất cả bảng
+    db.create_all()
+    
+    # Kiểm tra và thêm thông tin website nếu chưa có
+    if Website.query.count() == 0:
+        websites = [
+            {"name": "NetTruyen", "url": "https://nettruyenvie.com", "api_name": "nettruyen"},
+            {"name": "TruyenQQ", "url": "https://truyenqqto.com", "api_name": "truyenqq"},
+            {"name": "ManhuaVN", "url": "https://manhuavn.top", "api_name": "manhuavn"}
+        ]
+        
+        for site_data in websites:
+            website = Website(
+                name=site_data["name"],
+                url=site_data["url"],
+                api_name=site_data["api_name"]
+            )
+            db.session.add(website)
+            
+        # Kích hoạt ràng buộc khóa ngoại cho SQLite
+        db.session.execute("PRAGMA foreign_keys=ON")
+            
+        db.session.commit()
+        logger.info("Đã khởi tạo dữ liệu website")
+
+
+# Thay đổi phần cuối của file từ:
+if __name__ == '__main__':
+    app = create_app()
+    socketio.init_app(app)
+    socketio.run(app, debug=app.config['DEBUG'], host='0.0.0.0', port=5000)
+
+# Thành:
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all()
-        # Tối ưu SQLite
-        from database.operations import DatabaseOperations
-        db_manager.optimize_sqlite_db('databases/master.db')
-    socketio.run(app, debug=app.config['DEBUG'], host='0.0.0.0', port=5000)
+        # Khởi tạo database
+        init_database()
+        # Tối ưu SQLite nếu có
+        if hasattr(db_manager, 'optimize_sqlite_db'):
+            db_manager.optimize_sqlite_db('databases/master.db')
+    
+    # app đã được tạo và socketio đã được gắn với app ở trên đầu file
+    socketio.run(app, debug=app.config.get('DEBUG', True), host='0.0.0.0', port=5000)
