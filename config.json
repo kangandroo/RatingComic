@@ -1,0 +1,16 @@
+{
+    "chrome_driver_path": "",
+    "max_pages": 10,
+    "worker_count": 5,
+    "supported_websites": {
+        "TruyenQQ": "https://truyenqqto.com",
+        "NetTruyen": "https://nettruyenvie.com",
+        "Manhuavn": "https://manhuavn.top"
+    },
+    "database_folder": "database",
+    "sentiment_analysis": {
+        "use_transformer": true,
+        "model_name": "cardiffnlp/twitter-xlm-roberta-base-sentiment",
+        "cache_dir": "models"
+    }
+}

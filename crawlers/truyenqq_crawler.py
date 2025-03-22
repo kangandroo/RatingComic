@@ -3,27 +3,32 @@ import time
 import random
 import logging
 import re
+import threading
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import concurrent.futures
+from utils.sqlite_helper import SQLiteHelper
 
 logger = logging.getLogger(__name__)
 
 class TruyenQQCrawler(BaseCrawler):
     """Crawler cho trang TruyenQQ dựa trên code mẫu đã được tối ưu"""
     
-    def __init__(self, db_manager, base_url=None, max_pages=None, worker_count=5):
-        super().__init__(db_manager, base_url, max_pages)
+    def __init__(self, db_manager, config_manager, base_url=None, max_pages=None, worker_count=5):
+        super().__init__(db_manager, config_manager)
         
-        if not base_url:
-            self.base_url = "https://truyenqqto.com"
-            
-        # Số lượng worker cho xử lý đa luồng
+        # Đặt base_url từ tham số hoặc giá trị mặc định
+        self.base_url = base_url if base_url else "https://truyenqqto.com"
+        self.max_pages = max_pages
         self.worker_count = worker_count
-            
+        
+        # Khởi tạo SQLiteHelper
+        self.sqlite_helper = SQLiteHelper(self.db_manager.db_folder)
+        
         # User agent để tránh bị chặn
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
@@ -38,7 +43,23 @@ class TruyenQQCrawler(BaseCrawler):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
         
-        return webdriver.Chrome(options=chrome_options)
+        try:
+            # Lấy đường dẫn đến ChromeDriver từ config
+            chromedriver_path = self.config_manager.get_chrome_driver_path()
+            
+            # Kiểm tra xem chromedriver_path có tồn tại không
+            if chromedriver_path and os.path.exists(chromedriver_path):
+                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
+            else:
+                # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm chromedriver
+                # logger.warning("Không tìm thấy ChromeDriver, sử dụng mặc định của hệ thống")
+                return webdriver.Chrome(options=chrome_options)
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
+            # Fallback: thử không sử dụng Service
+            return webdriver.Chrome(options=chrome_options)
     
     def get_text_safe(self, element, selector):
         """Trích xuất nội dung văn bản an toàn từ một phần tử sử dụng bộ chọn CSS"""
@@ -70,7 +91,7 @@ class TruyenQQCrawler(BaseCrawler):
         return 0  # Trả về 0 nếu không tìm thấy số chương
     
     def crawl_basic_data(self, progress_callback=None):
-        """Crawl dữ liệu cơ bản của truyện từ trang TruyenQQ"""
+        """Crawl dữ liệu cơ bản của truyện từ trang TruyenQQ sử dụng SQLiteHelper thread-safe"""
         start_time = time.time()
         all_comics = []
         page_num = 1
@@ -147,8 +168,8 @@ class TruyenQQCrawler(BaseCrawler):
                         
                         # Cập nhật tiến trình
                         if progress_callback:
-                            progress = min(100, (page_num / max_pages) * 100)
-                            progress_callback.emit(progress)
+                            progress = min(50, (page_num / max_pages) * 50)  # Giới hạn 50% cho giai đoạn crawl danh sách
+                            progress_callback.emit(int(progress))
                         
                     except Exception as e:
                         logger.warning(f"Không thể lấy dữ liệu từ trang {page_num}: {str(e)}")
@@ -166,34 +187,49 @@ class TruyenQQCrawler(BaseCrawler):
             # Xử lý chi tiết từng truyện
             logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
             
-            # Xử lý song song
-            processed_comics = []
+            # Biến đếm cho số lượng truyện đã xử lý
+            processed_count = 0
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                # Chỉ lấy chi tiết cơ bản, không lấy comment
-                futures = [executor.submit(self.crawl_comic_details, comic) for comic in all_comics]
+            # Lock để đồng bộ hóa cập nhật biến processed_count
+            lock = threading.Lock()
+            
+            # Function để xử lý một truyện
+            def process_comic(comic):
+                nonlocal processed_count
                 
-                total = len(futures)
-                for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                    try:
-                        detailed_comic = future.result()
-                        processed_comics.append(detailed_comic)
+                try:
+                    # Lấy thông tin chi tiết
+                    detailed_comic = self.crawl_comic_details(comic)
+                    
+                    # Lưu vào database bằng SQLiteHelper
+                    comic_id = self.sqlite_helper.save_comic_to_db(detailed_comic, "TruyenQQ")
+                    
+                    # Cập nhật biến đếm an toàn
+                    with lock:
+                        processed_count += 1
                         
                         # Cập nhật tiến trình
-                        if progress_callback:
-                            processed_pct = min(100, 50 + (i / total) * 50)  # 50% cho crawl cơ bản + 50% cho chi tiết
-                            progress_callback.emit(processed_pct)
+                        if progress_callback and len(all_comics) > 0:
+                            progress = 50 + (processed_count / len(all_comics) * 50)  # 50% còn lại cho chi tiết
+                            progress_callback.emit(int(min(progress, 100)))
+                    
+                    # Log mỗi 5 truyện
+                    if processed_count % 5 == 0:
+                        logger.info(f"Đã xử lý và lưu: {processed_count}/{len(all_comics)} truyện")
                         
-                        # Log tiến trình
-                        if (i + 1) % 5 == 0 or i + 1 == total:
-                            logger.info(f"Đã xử lý chi tiết: {i + 1}/{total} truyện")
-                        
-                    except Exception as e:
-                        logger.error(f"Lỗi khi lấy chi tiết truyện: {str(e)}")
+                    return comic_id
+                    
+                except Exception as e:
+                    logger.error(f"Lỗi khi xử lý truyện {comic.get('ten_truyen', '')}: {e}")
+                    return None
             
-            # Lưu dữ liệu vào database
-            for comic in processed_comics:
-                self.db_manager.save_comic(comic)
+            # Xử lý song song với SQLiteHelper
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+                # Submit tất cả task
+                futures = [executor.submit(process_comic, comic) for comic in all_comics]
+                
+                # Đợi tất cả hoàn thành
+                concurrent.futures.wait(futures)
             
             # Tính thời gian thực hiện
             time_taken = time.time() - start_time
@@ -202,16 +238,26 @@ class TruyenQQCrawler(BaseCrawler):
             if progress_callback:
                 progress_callback.emit(100)
             
-            logger.info(f"Đã hoàn thành crawl, thu thập được {len(processed_comics)} truyện")
+            logger.info(f"Đã hoàn thành crawl, thu thập và lưu được {processed_count} truyện")
+            
+            # Đóng tất cả kết nối SQLite trong thread hiện tại
+            self.sqlite_helper.close_all_connections()
             
             return {
-                "count": len(processed_comics),
+                "count": processed_count,
                 "website": "TruyenQQ",
                 "time_taken": time_taken
             }
             
         except Exception as e:
             logger.error(f"Lỗi khi crawl dữ liệu: {str(e)}")
+            
+            # Đảm bảo đóng kết nối trong mọi trường hợp
+            try:
+                self.sqlite_helper.close_all_connections()
+            except:
+                pass
+                
             raise
     
     def crawl_comic_details(self, comic):
@@ -295,12 +341,13 @@ class TruyenQQCrawler(BaseCrawler):
         
         try:
             comic_url = comic.get("link_truyen")
-            if not comic_url:
-                logger.error(f"Không tìm thấy link truyện cho: {comic['ten_truyen']}")
+            comic_id = comic.get("id")
+            
+            if not comic_url or not comic_id:
+                logger.error(f"Không tìm thấy link hoặc ID truyện: {comic.get('ten_truyen', 'Unknown')}")
                 return []
                 
-            logger.info(f"Đang crawl comment cho truyện: {comic['ten_truyen']}")
-            logger.info(f"URL: {comic_url}")
+            logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')} (ID: {comic_id})")
             
             # Khởi tạo WebDriver
             driver = self.create_chrome_driver()
@@ -308,7 +355,6 @@ class TruyenQQCrawler(BaseCrawler):
             # Thử truy cập URL
             try:
                 driver.get(comic_url)
-                logger.info(f"Đã truy cập thành công URL: {comic_url}")
             except Exception as e:
                 logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
                 return []
@@ -319,10 +365,6 @@ class TruyenQQCrawler(BaseCrawler):
             if "Page not found" in driver.title or "404" in driver.title:
                 logger.error(f"Trang không tồn tại: {comic_url}")
                 return []
-            
-            # In source HTML cho debug
-            html_length = len(driver.page_source)
-            logger.info(f"Đã tải trang HTML (độ dài: {html_length} ký tự)")
             
             # Lặp qua các trang comment
             page_comment = 1
@@ -341,29 +383,21 @@ class TruyenQQCrawler(BaseCrawler):
                     # Gọi hàm loadComment để tải comment trang tiếp theo
                     try:
                         driver.execute_script("loadComment(arguments[0]);", page_comment)
-                        logger.info(f"Đã gọi hàm loadComment({page_comment})")
                     except Exception as e:
                         logger.error(f"Lỗi khi gọi hàm loadComment: {str(e)}")
                         break
                         
                     time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
                     
-                    # Đợi để comment được tải
-                    try:
-                        comment_elements = WebDriverWait(driver, 5).until(
-                            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment"))
-                        )
-                        logger.info(f"Tìm thấy {len(comment_elements)} comment trên trang {page_comment}")
-                    except Exception as e:
-                        logger.warning(f"Không thể tìm thấy comment trên trang {page_comment}: {str(e)}")
-                        break
-                        
                     # Kiểm tra xem có comment không
                     comment_elements = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
+                    
                     if not comment_elements:
                         logger.info(f"Không tìm thấy comment nào trên trang {page_comment}")
                         break
                         
+                    logger.info(f"Tìm thấy {len(comment_elements)} comment trên trang {page_comment}")
+                    
                     # Xử lý từng comment
                     new_comments_found = 0
                     for comment_elem in comment_elements:
@@ -389,7 +423,7 @@ class TruyenQQCrawler(BaseCrawler):
                             comment_data = {
                                 "ten_nguoi_binh_luan": name,
                                 "noi_dung": content,
-                                "story_id": comic.get("id")
+                                "comic_id": comic_id
                             }
                             
                             # Kiểm tra trùng lặp trước khi thêm
@@ -421,7 +455,10 @@ class TruyenQQCrawler(BaseCrawler):
                     logger.error(f"Lỗi khi xử lý trang comment {page_comment}: {str(e)}")
                     break
             
-            logger.info(f"Đã crawl được {len(all_comments)} comment cho truyện: {comic['ten_truyen']}")
+            # Lưu comments vào database sử dụng SQLiteHelper
+            if all_comments:
+                logger.info(f"Lưu {len(all_comments)} comment cho truyện ID {comic_id}")
+                self.sqlite_helper.save_comments_to_db(comic_id, all_comments, "TruyenQQ")
             
             return all_comments
             

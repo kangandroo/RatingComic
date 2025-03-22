@@ -1,43 +1,44 @@
-from abc import ABC, abstractmethod
+import logging
 
-class BaseCrawler(ABC):
-    """Lớp cơ sở cho tất cả crawler"""
+logger = logging.getLogger(__name__)
+
+class BaseCrawler:
+    """
+    Class cơ sở cho tất cả các crawler
+    """
     
-    def __init__(self, db_manager, base_url=None, max_pages=None):
+    def __init__(self, db_manager, config_manager):
         """
-        Khởi tạo crawler
+        Khởi tạo BaseCrawler
         
         Args:
-            db_manager: Database manager để lưu dữ liệu
-            base_url: URL gốc của website
-            max_pages: Số trang tối đa để crawl (None để không giới hạn)
+            db_manager: Database manager instance
+            config_manager: Config manager instance
         """
         self.db_manager = db_manager
-        self.base_url = base_url
-        self.max_pages = max_pages
+        self.config_manager = config_manager
+        logger.info("Khởi tạo BaseCrawler")
     
-    @abstractmethod
     def crawl_basic_data(self, progress_callback=None):
         """
-        Crawl dữ liệu cơ bản của truyện (không bao gồm comment)
+        Crawl dữ liệu cơ bản từ trang web
         
         Args:
             progress_callback: Callback để cập nhật tiến trình
             
         Returns:
-            Dict chứa kết quả crawl
+            dict: Kết quả crawl (count, time_taken, website)
         """
-        pass
+        raise NotImplementedError("Các lớp con phải implement phương thức này")
     
-    @abstractmethod
     def crawl_comments(self, comic):
         """
-        Crawl comment cho một truyện cụ thể
+        Crawl bình luận cho một truyện cụ thể
         
         Args:
-            comic: Thông tin truyện cần crawl comment
+            comic: Dictionary chứa thông tin truyện
             
         Returns:
-            List các comment
+            list: Danh sách bình luận
         """
-        pass
+        raise NotImplementedError("Các lớp con phải implement phương thức này")

@@ -1,40 +1,64 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import sys
+import logging
 import os
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QThreadPool
 from ui.main_window import MainWindow
-from utils.logger import setup_logger
-from database.db_manager import DatabaseManager
+from utils.config_manager import ConfigManager
+from crawlers.crawler_factory import CrawlerFactory
 
-def main():
-    # Tạo thư mục cho các file database
-    os.makedirs('data', exist_ok=True)
+# Thiết lập logging
+def setup_logging():
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
     
-    # Thiết lập logging
-    logger = setup_logger()
-    logger.info("Khởi động ứng dụng phân tích truyện tranh")
+    # Định dạng logging
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
     
-    # Khởi tạo database
-    db = DatabaseManager('data/comics.db')
-    db.setup_database()
+    # Thiết lập root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        datefmt=date_format,
+        handlers=[
+            logging.FileHandler(f"{log_dir}/rating_comic.log", encoding="utf-8"),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
     
-    # Khởi tạo thread pool
-    logger.info(f"Số lượng thread tối đa: {QThreadPool.globalInstance().maxThreadCount()}")
-    
-    # Khởi tạo ứng dụng và cửa sổ chính
-    app = QApplication(sys.argv)
-    app.setStyle('Fusion')  # Sử dụng style Fusion cho giao diện nhất quán
-    
-    # Đặt stylesheet (tùy chọn)
-    with open('utils/style.css', 'r') as f:
-        app.setStyleSheet(f.read())
-    
-    # Khởi tạo cửa sổ chính
-    main_window = MainWindow()
-    main_window.show()
-    
-    # Chạy ứng dụng
-    sys.exit(app.exec())
+    # Thiết lập logger cho thư viện bên thứ ba
+    logging.getLogger("selenium").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 if __name__ == "__main__":
-    main()
+    # Thiết lập logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Khởi động ứng dụng Rating Comic")
+    
+    # Khởi tạo ứng dụng PyQt
+    app = QApplication(sys.argv)
+    
+    # Tạo thư mục cần thiết
+    os.makedirs("database", exist_ok=True)
+    os.makedirs("output", exist_ok=True)
+    
+    try:
+        # Khởi tạo ConfigManager
+        config_manager = ConfigManager("config/config.json")
+        
+        # Khởi tạo CrawlerFactory
+        CrawlerFactory.initialize(config_manager)
+        
+        # Khởi tạo và hiển thị MainWindow
+        window = MainWindow(config_manager)
+        window.show()
+        
+        # Chạy ứng dụng
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.error(f"Lỗi khi khởi động ứng dụng: {str(e)}")
+        sys.exit(1)
