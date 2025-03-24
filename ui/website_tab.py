@@ -64,7 +64,7 @@ class WebsiteTab(QWidget):
         pages_layout = QVBoxLayout()
         pages_label = QLabel("Số trang:")
         self.pages_spin = QSpinBox()
-        self.pages_spin.setRange(1, 100)
+        self.pages_spin.setRange(1, 1000000)
         self.pages_spin.setValue(self.config_manager.get("max_pages", 10))
         
         pages_layout.addWidget(pages_label)
@@ -74,7 +74,7 @@ class WebsiteTab(QWidget):
         workers_layout = QVBoxLayout()
         workers_label = QLabel("Số worker:")
         self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(1, 20)
+        self.workers_spin.setRange(1, 100)
         self.workers_spin.setValue(self.config_manager.get("worker_count", 5))
         
         workers_layout.addWidget(workers_label)

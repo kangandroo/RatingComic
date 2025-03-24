@@ -8,6 +8,12 @@ import time
 import os
 import traceback
 from datetime import datetime
+from PyQt6.QtWidgets import QDialog
+from PyQt6.QtGui import QColor
+from datetime import datetime, timedelta
+from analysis.rating_factory import RatingFactory
+import pandas as pd
+from PyQt6.QtGui import QIcon
 
 from utils.worker import Worker
 from analysis.sentiment_analyzer import SentimentAnalyzer
@@ -37,6 +43,8 @@ class DetailAnalysisTab(QWidget):
         
         # Tạo thư mục xuất kết quả nếu chưa có
         os.makedirs("output", exist_ok=True)
+        
+        self.load_history_data()
         
         logger.info("Khởi tạo DetailAnalysisTab thành công")
     
@@ -164,6 +172,397 @@ class DetailAnalysisTab(QWidget):
         control_layout.addWidget(self.export_button)
         
         main_layout.addLayout(control_layout)
+
+
+        # Thêm tab lịch sử phân tích
+        self.history_tab = QWidget()
+        history_layout = QVBoxLayout(self.history_tab)
+
+        # Thêm bộ lọc nguồn dữ liệu
+        filter_layout = QHBoxLayout()
+        filter_label = QLabel("Nguồn dữ liệu:")
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["Tất cả", "TruyenQQ", "NetTruyen", "Manhuavn"])
+        self.source_combo.currentTextChanged.connect(self.filter_history_data)
+
+        # Thêm bộ lọc thời gian
+        self.time_filter_combo = QComboBox()
+        self.time_filter_combo.addItems(["Tất cả", "7 ngày gần đây", "30 ngày gần đây"])
+        self.time_filter_combo.currentTextChanged.connect(self.filter_history_data)
+
+        filter_layout.addWidget(filter_label)
+        filter_layout.addWidget(self.source_combo)
+        filter_layout.addWidget(QLabel("Thời gian:"))
+        filter_layout.addWidget(self.time_filter_combo)
+        filter_layout.addStretch()
+
+        # Thêm buttons cho các chức năng
+        button_layout = QHBoxLayout()
+        self.refresh_button = QPushButton("Làm mới dữ liệu")
+        self.refresh_button.clicked.connect(self.load_history_data)
+        self.export_history_button = QPushButton("Xuất ra Excel")
+        self.export_history_button.clicked.connect(self.export_history_to_excel)
+        self.export_history_button.setIcon(QIcon.fromTheme("document-save"))
+
+        button_layout.addStretch()
+        button_layout.addWidget(self.refresh_button)
+        button_layout.addWidget(self.export_history_button)
+
+        # Tạo bảng lịch sử phân tích - KHỞI TẠO TRƯỚC KHI SỬ DỤNG
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(11)
+        self.history_table.setHorizontalHeaderLabels([
+            "Tên truyện", "Nguồn", "Số comment", "Sentiment tích cực (%)", 
+            "Sentiment tiêu cực (%)", "Sentiment trung tính (%)", 
+            "Điểm sentiment", "Điểm tổng hợp", "Thời gian phân tích",
+            "Chi tiết", "Phân tích lại"
+        ])
+
+        # Thiết lập header
+        header = self.history_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Tên truyện
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Nguồn
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Số comment
+        for i in range(3, 8):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Thời gian
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Chi tiết
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Phân tích lại
+
+        # Thêm các layout và widget theo đúng thứ tự
+        history_layout.addLayout(filter_layout)
+        history_layout.addLayout(button_layout)
+        history_layout.addWidget(self.history_table)
+
+        # # Thêm biểu đồ phân tích sentiment
+        # self.sentiment_chart_layout = QVBoxLayout()
+        # self.sentiment_chart_label = QLabel("Biểu đồ phân tích sentiment")
+        # self.sentiment_chart_layout.addWidget(self.sentiment_chart_label)
+
+        # # Tạo placeholder cho biểu đồ
+        # chart_placeholder = QLabel("Biểu đồ sẽ hiển thị ở đây")
+        # chart_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # chart_placeholder.setStyleSheet("background-color: #f0f0f0; min-height: 200px;")
+        # self.sentiment_chart_layout.addWidget(chart_placeholder)
+
+        # history_layout.addLayout(self.sentiment_chart_layout)
+
+        # Thêm tab vào result_tabs
+        self.result_tabs.addTab(self.history_tab, "Lịch sử phân tích")
+            
+    def export_history_to_excel(self):
+        """Xuất dữ liệu lịch sử phân tích ra file Excel"""
+        if self.history_table.rowCount() == 0:
+            QMessageBox.warning(self, "Cảnh báo", "Không có dữ liệu để xuất!")
+            return
+        
+        # Mở dialog chọn file
+        current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"output/sentiment_history_{current_datetime}.xlsx"
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu file Excel", default_filename, "Excel Files (*.xlsx)"
+        )
+        
+        if not file_path:
+            return  # Người dùng đã hủy
+        
+        try:
+            # Tạo DataFrame từ dữ liệu bảng
+            data = []
+            for row in range(self.history_table.rowCount()):
+                row_data = {}
+                # Lấy dữ liệu từ các cột (bỏ qua cột nút)
+                row_data["Tên truyện"] = self.history_table.item(row, 0).text()
+                row_data["Nguồn"] = self.history_table.item(row, 1).text()
+                row_data["Số comment"] = int(self.history_table.item(row, 2).text())
+                
+                # Xử lý % trong chuỗi
+                row_data["Sentiment tích cực (%)"] = float(self.history_table.item(row, 3).text().replace('%', ''))
+                row_data["Sentiment tiêu cực (%)"] = float(self.history_table.item(row, 4).text().replace('%', ''))
+                row_data["Sentiment trung tính (%)"] = float(self.history_table.item(row, 5).text().replace('%', ''))
+                
+                row_data["Điểm sentiment"] = float(self.history_table.item(row, 6).text())
+                row_data["Điểm tổng hợp"] = float(self.history_table.item(row, 7).text())
+                row_data["Thời gian phân tích"] = self.history_table.item(row, 8).text()
+                
+                data.append(row_data)
+            
+            # Tạo DataFrame
+            df = pd.DataFrame(data)
+            
+            # Tạo Excel writer với Pandas
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                # Tạo sheet "Danh sách truyện"
+                df.to_excel(writer, sheet_name='Phân tích Sentiment', index=False)
+                
+                # Tạo sheet "Thống kê"
+                stats_data = {
+                    'Nguồn': ['TruyenQQ', 'NetTruyen', 'Manhuavn', 'Tất cả'],
+                    'Số lượng truyện': [
+                        len([d for d in data if d['Nguồn'] == 'TruyenQQ']),
+                        len([d for d in data if d['Nguồn'] == 'NetTruyen']),
+                        len([d for d in data if d['Nguồn'] == 'Manhuavn']),
+                        len(data)
+                    ],
+                    'Điểm sentiment trung bình': [
+                        sum(d['Điểm sentiment'] for d in data if d['Nguồn'] == 'TruyenQQ') / max(1, len([d for d in data if d['Nguồn'] == 'TruyenQQ'])),
+                        sum(d['Điểm sentiment'] for d in data if d['Nguồn'] == 'NetTruyen') / max(1, len([d for d in data if d['Nguồn'] == 'NetTruyen'])),
+                        sum(d['Điểm sentiment'] for d in data if d['Nguồn'] == 'Manhuavn') / max(1, len([d for d in data if d['Nguồn'] == 'Manhuavn'])),
+                        sum(d['Điểm sentiment'] for d in data) / max(1, len(data))
+                    ],
+                    'Điểm tổng hợp trung bình': [
+                        sum(d['Điểm tổng hợp'] for d in data if d['Nguồn'] == 'TruyenQQ') / max(1, len([d for d in data if d['Nguồn'] == 'TruyenQQ'])),
+                        sum(d['Điểm tổng hợp'] for d in data if d['Nguồn'] == 'NetTruyen') / max(1, len([d for d in data if d['Nguồn'] == 'NetTruyen'])),
+                        sum(d['Điểm tổng hợp'] for d in data if d['Nguồn'] == 'Manhuavn') / max(1, len([d for d in data if d['Nguồn'] == 'Manhuavn'])),
+                        sum(d['Điểm tổng hợp'] for d in data) / max(1, len(data))
+                    ],
+                    'Sentiment tích cực trung bình (%)': [
+                        sum(d['Sentiment tích cực (%)'] for d in data if d['Nguồn'] == 'TruyenQQ') / max(1, len([d for d in data if d['Nguồn'] == 'TruyenQQ'])),
+                        sum(d['Sentiment tích cực (%)'] for d in data if d['Nguồn'] == 'NetTruyen') / max(1, len([d for d in data if d['Nguồn'] == 'NetTruyen'])),
+                        sum(d['Sentiment tích cực (%)'] for d in data if d['Nguồn'] == 'Manhuavn') / max(1, len([d for d in data if d['Nguồn'] == 'Manhuavn'])),
+                        sum(d['Sentiment tích cực (%)'] for d in data) / max(1, len(data))
+                    ],
+                    'Sentiment tiêu cực trung bình (%)': [
+                        sum(d['Sentiment tiêu cực (%)'] for d in data if d['Nguồn'] == 'TruyenQQ') / max(1, len([d for d in data if d['Nguồn'] == 'TruyenQQ'])),
+                        sum(d['Sentiment tiêu cực (%)'] for d in data if d['Nguồn'] == 'NetTruyen') / max(1, len([d for d in data if d['Nguồn'] == 'NetTruyen'])),
+                        sum(d['Sentiment tiêu cực (%)'] for d in data if d['Nguồn'] == 'Manhuavn') / max(1, len([d for d in data if d['Nguồn'] == 'Manhuavn'])),
+                        sum(d['Sentiment tiêu cực (%)'] for d in data) / max(1, len(data))
+                    ]
+                }
+                
+                stats_df = pd.DataFrame(stats_data)
+                stats_df.to_excel(writer, sheet_name='Thống kê nguồn', index=False)
+                
+                # Thêm thông tin người dùng và thời gian
+                metadata_df = pd.DataFrame({
+                    'Thông tin': ['Thời gian xuất báo cáo', 'Người thực hiện', 'Tổng số truyện', 'Nguồn dữ liệu đã lọc'],
+                    'Giá trị': [
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "user_19",  # Lấy từ thông tin người dùng
+                        len(data),
+                        self.source_combo.currentText()
+                    ]
+                })
+                metadata_df.to_excel(writer, sheet_name='Thông tin xuất', index=False)
+                
+                # Định dạng các sheet (tùy chọn, có thể thêm sau với openpyxl)
+            
+            # Hiển thị thông báo thành công
+            QMessageBox.information(
+                self, "Thành công", 
+                f"Đã xuất dữ liệu ra file:\n{file_path}"
+            )
+            
+            logger.info(f"Đã xuất dữ liệu lịch sử phân tích ra file: {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi xuất file Excel: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khi xuất file Excel: {str(e)}")    
+    
+        
+    def load_history_data(self):
+        """Tải dữ liệu lịch sử phân tích từ cơ sở dữ liệu"""
+        self.history_table.setRowCount(0)
+        
+        # Tính toán thời gian lọc nếu có
+        time_filter = self.time_filter_combo.currentText()
+        days = None
+        if time_filter == "7 ngày gần đây":
+            days = 7
+        elif time_filter == "30 ngày gần đây":
+            days = 30
+        
+        # Lấy nguồn dữ liệu đã chọn
+        source = self.source_combo.currentText()
+        sources = []
+        if source == "Tất cả":
+            sources = ["TruyenQQ", "NetTruyen", "Manhuavn"]
+        else:
+            sources = [source]
+        
+        analyzed_comics = []
+        
+        # Lấy dữ liệu từ mỗi nguồn
+        for source_name in sources:
+            # Đặt nguồn
+            self.db_manager.set_source(source_name)
+            
+            # Lấy tất cả truyện từ nguồn này
+            comics = self.db_manager.get_all_comics()
+            
+            for comic in comics:
+                # Lấy tất cả comments cho truyện này
+                comments = self.db_manager.get_all_comments(comic["id"])
+                
+                # Chỉ xử lý truyện có comments đã phân tích sentiment
+                sentiment_comments = [c for c in comments if c.get("sentiment") is not None]
+                
+                if sentiment_comments:
+                    # Tính toán thống kê sentiment
+                    positive = [c for c in sentiment_comments if c.get("sentiment") == "positive"]
+                    negative = [c for c in sentiment_comments if c.get("sentiment") == "negative"]
+                    neutral = [c for c in sentiment_comments if c.get("sentiment") == "neutral"]
+                    
+                    total = len(sentiment_comments)
+                    positive_percent = len(positive) / total * 100 if total > 0 else 0
+                    negative_percent = len(negative) / total * 100 if total > 0 else 0
+                    neutral_percent = len(neutral) / total * 100 if total > 0 else 0
+                    
+                    # Tính điểm sentiment dựa trên công thức hiện tại
+                    sentiment_score = (positive_percent * 8/100 ) - (negative_percent * 5/100) + (neutral_percent * 6/100)
+                    sentiment_score = max(0, min(10, sentiment_score * 2))
+                    
+                    # Tính điểm tổng hợp
+                    rating_calculator = RatingFactory.get_calculator(source_name)
+                    base_rating = rating_calculator.calculate(comic)
+                    comprehensive_rating = base_rating * 0.6 + sentiment_score * 0.4
+                    
+                    # Thêm thời gian phân tích (sử dụng thời gian cập nhật của comment gần nhất)
+                    if sentiment_comments:
+                        analysis_time = max(c.get("thoi_gian_cap_nhat", "") for c in sentiment_comments)
+                    else:
+                        analysis_time = "Không rõ"
+                    
+                    # Thêm vào danh sách
+                    analyzed_comics.append({
+                        "comic": comic,
+                        "source": source_name,
+                        "comments": sentiment_comments,
+                        "positive_percent": positive_percent,
+                        "negative_percent": negative_percent,
+                        "neutral_percent": neutral_percent,
+                        "sentiment_score": sentiment_score,
+                        "base_rating": base_rating,
+                        "comprehensive_rating": comprehensive_rating,
+                        "analysis_time": analysis_time
+                    })
+        
+        # Sắp xếp theo thời gian phân tích, mới nhất lên đầu
+        analyzed_comics.sort(key=lambda x: x["analysis_time"], reverse=True)
+        
+        # Hiển thị dữ liệu trong bảng
+        for comic_data in analyzed_comics:
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
+            
+            comic = comic_data["comic"]
+            
+            self.history_table.setItem(row, 0, QTableWidgetItem(comic.get("ten_truyen", "")))
+            self.history_table.setItem(row, 1, QTableWidgetItem(comic_data["source"]))
+            self.history_table.setItem(row, 2, QTableWidgetItem(str(len(comic_data["comments"]))))
+            
+            # Format phần trăm
+            self.history_table.setItem(row, 3, QTableWidgetItem(f"{comic_data['positive_percent']:.1f}%"))
+            self.history_table.setItem(row, 4, QTableWidgetItem(f"{comic_data['negative_percent']:.1f}%"))
+            self.history_table.setItem(row, 5, QTableWidgetItem(f"{comic_data['neutral_percent']:.1f}%"))
+            
+            self.history_table.setItem(row, 6, QTableWidgetItem(f"{comic_data['sentiment_score']:.2f}"))
+            self.history_table.setItem(row, 7, QTableWidgetItem(f"{comic_data['comprehensive_rating']:.2f}"))
+            self.history_table.setItem(row, 8, QTableWidgetItem(str(comic_data["analysis_time"])))
+            
+            # Nút Chi tiết
+            detail_button = QPushButton("Chi tiết")
+            detail_button.clicked.connect(lambda _, c=comic: self.show_sentiment_details(c))
+            self.history_table.setCellWidget(row, 9, detail_button)
+            
+            # Nút Phân tích lại
+            reanalyze_button = QPushButton("Phân tích lại")
+            reanalyze_button.clicked.connect(lambda _, c=comic: self.reanalyze_comic(c))
+            self.history_table.setCellWidget(row, 10, reanalyze_button)
+        
+        # # Cập nhật biểu đồ tổng quan
+        # self.update_sentiment_chart(analyzed_comics)
+
+    def filter_history_data(self):
+        """Lọc dữ liệu lịch sử theo bộ lọc đã chọn"""
+        # Gọi lại load_history_data sẽ áp dụng các bộ lọc hiện tại
+        self.load_history_data()
+
+    def show_sentiment_details(self, comic):
+        """Hiển thị chi tiết phân tích sentiment của một truyện"""
+        # Tạo dialog hiển thị chi tiết
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Chi tiết sentiment: {comic.get('ten_truyen', '')}")
+        dialog.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Tạo bảng comments
+        comment_table = QTableWidget()
+        comment_table.setColumnCount(4)
+        comment_table.setHorizontalHeaderLabels([
+            "Người bình luận", "Nội dung", "Sentiment", "Điểm"
+        ])
+        
+        header = comment_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        
+        # Lấy comments cho truyện này
+        self.db_manager.set_source(comic.get("nguon", "TruyenQQ"))
+        comments = self.db_manager.get_all_comments(comic["id"])
+        
+        # Thêm comments vào bảng
+        for comment in comments:
+            row = comment_table.rowCount()
+            comment_table.insertRow(row)
+            
+            comment_table.setItem(row, 0, QTableWidgetItem(comment.get("ten_nguoi_binh_luan", "")))
+            comment_table.setItem(row, 1, QTableWidgetItem(comment.get("noi_dung", "")))
+            
+            sentiment = comment.get("sentiment", "neutral")
+            sentiment_item = QTableWidgetItem(sentiment)
+            
+            # Tô màu theo sentiment
+            if sentiment == "positive":
+                sentiment_item.setBackground(QColor(200, 255, 200))  # Xanh nhạt
+            elif sentiment == "negative":
+                sentiment_item.setBackground(QColor(255, 200, 200))  # Đỏ nhạt
+            
+            comment_table.setItem(row, 2, sentiment_item)
+            comment_table.setItem(row, 3, QTableWidgetItem(f"{comment.get('sentiment_score', 0.5):.2f}"))
+        
+        layout.addWidget(comment_table)
+        
+        # Thêm nút đóng
+        close_button = QPushButton("Đóng")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        
+        dialog.exec()
+
+    # def update_sentiment_chart(self, analyzed_comics):
+    #     """Cập nhật biểu đồ phân tích sentiment"""
+    #     # Trong phiên bản đầy đủ, bạn sẽ sử dụng matplotlib hoặc pyqtgraph
+    #     # Đây chỉ là placeholder
+    #     if not analyzed_comics:
+    #         self.sentiment_chart_label.setText("Không có dữ liệu để hiển thị biểu đồ")
+    #         return
+        
+    #     self.sentiment_chart_label.setText(
+    #         f"Tổng hợp từ {len(analyzed_comics)} truyện: "
+    #         f"Tích cực: {sum(c['positive_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%, "
+    #         f"Tiêu cực: {sum(c['negative_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%, "
+    #         f"Trung tính: {sum(c['neutral_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%"
+    #     )
+
+    def reanalyze_comic(self, comic):
+        """Phân tích lại sentiment cho một truyện"""
+        reply = QMessageBox.question(
+            self, "Xác nhận", 
+            f"Bạn có muốn phân tích lại sentiment cho truyện '{comic.get('ten_truyen', '')}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Thêm truyện vào selected_comics và bắt đầu phân tích
+            self.selected_comics = [comic]
+            self.start_analysis()
+        
+    
     
     def set_selected_comics(self, selected_comics):
         """
@@ -478,6 +877,7 @@ class DetailAnalysisTab(QWidget):
                     item = self.result_table.item(row, col)
                     item.setBackground(Qt.GlobalColor.yellow)
         
+        self.load_history_data()
         # Bật lại tính năng sắp xếp
         self.result_table.setSortingEnabled(True)
         
