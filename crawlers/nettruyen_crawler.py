@@ -30,7 +30,7 @@ class NetTruyenCrawler(BaseCrawler):
         self.db_manager.set_source("NetTruyen")  # Đặt nguồn dữ liệu mặc định
     
     def setup_driver(self):
-        """Khởi tạo trình duyệt Chrome"""
+        """Khởi tạo trình duyệt Chrome với tùy chọn vô hiệu hóa TensorFlow"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -38,23 +38,49 @@ class NetTruyenCrawler(BaseCrawler):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--lang=vi")
         
+        # Vô hiệu hóa TensorFlow và các tính năng ML
+        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees")
+        chrome_options.add_argument("--disable-machine-learning")
+        chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
+        
+        # Vô hiệu hóa WebGL và GPU acceleration (có thể dùng TensorFlow)
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-webgl")
+        
+        # Giảm tài nguyên sử dụng bởi Chrome
+        chrome_options.add_argument("--js-flags=--expose-gc")
+        chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument("--disable-extensions")
+        
+        # Vô hiệu hóa logging
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        
+        # Thiết lập biến môi trường để vô hiệu hóa TensorFlow logging
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 3 = ERROR, vô hiệu hóa INFO và WARNING
+        
         try:
             # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\Test\crawlers\chromedriver.exe"
+            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
             
             # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
                 logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
-                return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
+                service = Service(chromedriver_path)
+                service.log_path = os.devnull  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(service=service, options=chrome_options)
             else:
-                # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm chromedriver
-                # logger.warning("Không tìm thấy ChromeDriver, sử dụng mặc định của hệ thống")
-                return webdriver.Chrome(options=chrome_options)
-                
+                # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm
+                service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(service=service, options=chrome_options)
+                    
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
-            # Fallback: thử không sử dụng Service
-            return webdriver.Chrome(options=chrome_options)
+            try:
+                # Fallback: thử không sử dụng Service
+                return webdriver.Chrome(options=chrome_options)
+            except Exception as e2:
+                logger.critical(f"Lỗi nghiêm trọng khi khởi tạo Chrome driver: {e2}")
+                raise RuntimeError(f"Không thể khởi tạo Chrome driver: {e2}")
     
     def get_text_safe(self, element, selector):
         """Lấy text an toàn từ phần tử"""
@@ -287,11 +313,11 @@ class NetTruyenCrawler(BaseCrawler):
                 logger.error(f"Lỗi khi lấy số chương: {e}")
 
             # Lấy số bình luận
-            try:
-                comment_count_text = self.get_text_safe(driver, ".comment-count")
-                story["Số bình luận"] = self.extract_number(comment_count_text)
-            except:
-                story["Số bình luận"] = 0
+            # try:
+            #     comment_count_text = self.get_text_safe(driver, ".comment-count")
+            #     story["Số bình luận"] = self.extract_number(comment_count_text)
+            # except:
+            #     story["Số bình luận"] = 0
 
         except Exception as e:
             logger.error(f"Lỗi khi lấy thông tin chi tiết truyện {story.get('Tên truyện')}: {e}")
