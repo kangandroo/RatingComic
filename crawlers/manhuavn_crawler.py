@@ -33,54 +33,116 @@ class ManhuavnCrawler(BaseCrawler):
         logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
         
     def setup_driver(self):
-        """Khởi tạo trình duyệt Chrome với tùy chọn vô hiệu hóa TensorFlow"""
+        """Tạo và cấu hình Chrome WebDriver với các tùy chọn vô hiệu hóa TensorFlow và GPU"""
         chrome_options = Options()
+        
+        # Cấu hình cơ bản
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--lang=vi")
+        chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
         
-        # Vô hiệu hóa TensorFlow và các tính năng ML
-        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees")
+        # === VÔ HIỆU HÓA TENSORFLOW & ML ===
+        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees,AcceleratedSmallCanvases,CanvasHitRegions,CanvasImageSmoothing")
         chrome_options.add_argument("--disable-machine-learning")
         chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
         
-        # Vô hiệu hóa WebGL và GPU acceleration (có thể dùng TensorFlow)
+        # Vô hiệu hóa TensorFlow Lite và các tính năng ML
+        chrome_options.add_argument("--disable-features=TensorFlowLite,TensorFlowLiteServerSide,TensorFlowLiteEngine,TensorFlowLiteEmbedded,TensorFlowLiteGPU")
+        chrome_options.add_argument("--disable-features=NeuralNetworkTensorflowEstimator,NeuralNetworkModelLoader")
+        chrome_options.add_argument("--disable-features=OptimizationHints,DocumentInFlightNetworkHints")
+        
+        # === VÔ HIỆU HÓA GPU & HARDWARE ACCELERATION ===
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-webgl")
+        chrome_options.add_argument("--disable-webgl2")
+        chrome_options.add_argument("--disable-accelerated-2d-canvas")
+        chrome_options.add_argument("--disable-3d-apis")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_argument("--use-gl=swiftshader")
+        chrome_options.add_argument("--use-angle=swiftshader")
         
-        # Giảm tài nguyên sử dụng bởi Chrome
-        chrome_options.add_argument("--js-flags=--expose-gc")
-        chrome_options.add_argument("--disable-notifications")
+        # Vô hiệu hóa các tính năng đồ họa nâng cao
+        chrome_options.add_argument("--disable-canvas-aa")
+        chrome_options.add_argument("--disable-2d-canvas-clip-aa")
+        chrome_options.add_argument("--disable-gl-drawing-for-tests")
+        chrome_options.add_argument("--force-color-profile=srgb")
+        
+        # === TỐI ƯU CHO ĐA LUỒNG ===
+        chrome_options.add_argument("--single-process")  # Quan trọng cho đa luồng
+        chrome_options.add_argument("--memory-model=low")
+        chrome_options.add_argument("--disable-infobars")
         chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--window-size=1280,1024")
+        chrome_options.add_argument("--disable-notifications")
         
-        # Vô hiệu hóa logging
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        # Tắt các tính năng tiêu tốn tài nguyên
+        chrome_options.add_argument("--disable-remote-fonts")
+        chrome_options.add_argument("--disable-features=LazyFrameLoading,BlinkRuntimeCallStats")
+        chrome_options.add_argument("--disable-default-apps")
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+        chrome_options.add_argument("--disable-renderer-backgrounding")
+        chrome_options.add_argument("--disable-background-timer-throttling")
+        chrome_options.add_argument("--disable-background-networking")
         
-        # Thiết lập biến môi trường để vô hiệu hóa TensorFlow logging
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 3 = ERROR, vô hiệu hóa INFO và WARNING
+        # Tắt TensorFlow logging hoàn toàn
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+        os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+        os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
+        os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
+        
+        prefs = {
+            # Tắt tải hình ảnh
+            'profile.default_content_settings.images': 2,
+            'profile.managed_default_content_settings.images': 2,
+            
+            'profile.default_content_settings.cookies': 2,
+            'profile.managed_default_content_settings.cookies': 2,
+            
+            'plugins.plugins_disabled': ['Chrome PDF Viewer'],
+            
+            'profile.default_content_settings.storage': 2,
+            'profile.managed_default_content_settings.storage': 2,
+            
+            'profile.default_content_settings.notifications': 2,
+            'profile.default_content_settings.geolocation': 2,
+            
+            'webgl.disabled': True,
+            'hardware_acceleration_mode.enabled': False,
+            
+            'profile.hardware_acceleration_enabled': False,
+        }
+        chrome_options.add_experimental_option('prefs', prefs)
+        
+        # Tắt logging và automation flags
+        chrome_options.add_experimental_option('excludeSwitches', ["enable-automation", "enable-logging"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
         
         try:
-            # Lấy đường dẫn đến ChromeDriver từ config
+            # Lấy đường dẫn đến ChromeDriver
             chromedriver_path = self.config_manager.get_chrome_driver_path()
             
-            # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
                 logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
                 service = Service(chromedriver_path)
                 service.log_path = os.devnull  # Vô hiệu hóa Selenium log
                 return webdriver.Chrome(service=service, options=chrome_options)
             else:
-                # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm
                 service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
-                return webdriver.Chrome(service=service, options=chrome_options)
-                    
+                return webdriver.Chrome(options=chrome_options, service=service)
+                
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
             try:
-                # Fallback: thử không sử dụng Service
-                return webdriver.Chrome(options=chrome_options)
+                # Fallback mode - thử một lần nữa với ít tùy chọn hơn
+                fallback_options = Options()
+                fallback_options.add_argument("--headless")
+                fallback_options.add_argument("--no-sandbox")
+                fallback_options.add_argument("--disable-gpu")
+                fallback_options.add_argument("--disable-dev-shm-usage")
+                return webdriver.Chrome(options=fallback_options)
             except Exception as e2:
                 logger.critical(f"Lỗi nghiêm trọng khi khởi tạo Chrome driver: {e2}")
                 raise RuntimeError(f"Không thể khởi tạo Chrome driver: {e2}")
