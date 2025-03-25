@@ -63,11 +63,11 @@ class ManhuavnCrawler(BaseCrawler):
         
         try:
             # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
+            chromedriver_path = self.config_manager.get_chrome_driver_path()
             
             # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
-                # logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
                 service = Service(chromedriver_path)
                 service.log_path = os.devnull  # Vô hiệu hóa Selenium log
                 return webdriver.Chrome(service=service, options=chrome_options)

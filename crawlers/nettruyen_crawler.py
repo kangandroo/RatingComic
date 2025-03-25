@@ -60,11 +60,11 @@ class NetTruyenCrawler(BaseCrawler):
         
         try:
             # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
+            chromedriver_path = self.config_manager.get_chrome_driver_path()
             
             # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
-                # logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
                 service = Service(chromedriver_path)
                 service.log_path = os.devnull  # Vô hiệu hóa Selenium log
                 return webdriver.Chrome(service=service, options=chrome_options)
@@ -312,7 +312,7 @@ class NetTruyenCrawler(BaseCrawler):
             except Exception as e:
                 logger.error(f"Lỗi khi lấy số chương: {e}")
 
-            Lấy số bình luận
+            # Lấy số bình luận
             try:
                 comment_count_text = self.get_text_safe(driver, ".comment-count")
                 story["Số bình luận"] = self.extract_number(comment_count_text)

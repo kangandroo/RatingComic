@@ -11,6 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import concurrent.futures
+import os
 from utils.sqlite_helper import SQLiteHelper
 
 logger = logging.getLogger(__name__)
@@ -77,10 +78,10 @@ class TruyenQQCrawler(BaseCrawler):
             os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
             
             # Lấy đường dẫn đến ChromeDriver
-            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
+            chromedriver_path = self.config_manager.get_chrome_driver_path()
             
             if chromedriver_path and os.path.exists(chromedriver_path):
-                # logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
                 service = Service(chromedriver_path)
                 service.log_path = os.devnull  # Vô hiệu hóa Selenium log
                 return webdriver.Chrome(service=service, options=chrome_options)
@@ -342,15 +343,15 @@ class TruyenQQCrawler(BaseCrawler):
             # Lấy mô tả
             comic["mo_ta"] = self.get_text_safe(driver, "div.story-detail-info.detail-content")
             
-            # Đếm số bình luận
-            comment_count = 0
-            try:
-                comment_elems = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
-                comment_count = len(comment_elems)
-            except:
-                pass
+            # # Đếm số bình luận
+            # comment_count = 0
+            # try:
+            #     comment_elems = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
+            #     comment_count = len(comment_elems)
+            # except:
+            #     pass
             
-            comic["so_binh_luan"] = comment_count
+            # comic["so_binh_luan"] = comment_count
             
             # Chuyển các giá trị sang số
             try:
