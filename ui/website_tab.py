@@ -1,8 +1,9 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QPushButton, QProgressBar, QTableWidget, 
                             QTableWidgetItem, QCheckBox, QHeaderView, QMessageBox,
-                            QSpinBox, QGroupBox)
-from PyQt6.QtCore import Qt, QThreadPool, pyqtSignal, pyqtSlot
+                            QSpinBox, QGroupBox, QApplication)
+from PyQt6.QtCore import Qt, QThreadPool, pyqtSignal, pyqtSlot, QTimer
+from analysis.rating_thread import RatingCalculationThread
 import logging
 import time
 from analysis.rating_factory import RatingFactory
@@ -28,6 +29,14 @@ class WebsiteTab(QWidget):
         self.is_crawling = False
         self.all_comics = []
         self.checked_comics = []
+        
+        # Thêm biến cho xử lý batch
+        self.batch_size = 20  # Số truyện xử lý mỗi lần
+        self.current_batch = 0
+        self.total_batches = 0
+        self.batch_timer = QTimer(self)
+        self.batch_timer.timeout.connect(self.process_next_batch)
+        self.rating_results = {}  # Lưu kết quả rating
         
         # Thiết lập UI
         self.init_ui()
@@ -107,8 +116,6 @@ class WebsiteTab(QWidget):
         results_layout = QVBoxLayout()
         
         # Results filter
-        # Thêm vào phần filter_layout trong init_ui()
-
         filter_layout = QHBoxLayout()
 
         filter_label = QLabel("Kết quả:")
@@ -229,18 +236,31 @@ class WebsiteTab(QWidget):
     
     def populate_results_table(self):
         """Hiển thị danh sách truyện trong bảng kết quả"""
-        
         # Xóa dữ liệu cũ
         self.results_table.setRowCount(0)
         
+        if not self.all_comics:
+            return
+        
+        # Reset rating results
+        self.rating_results = {}
+        
+        # Hiển thị tất cả dữ liệu cơ bản
+        self.display_all_comics()
+        
+        # Bắt đầu tính rating theo batch
+        self.start_batch_processing()
+    
+    def display_all_comics(self):
+        """Hiển thị dữ liệu cơ bản cho tất cả truyện"""
         # Tạm thời tắt sorting
         self.results_table.setSortingEnabled(False)
         
+        # Thiết lập số dòng cho bảng
+        self.results_table.setRowCount(len(self.all_comics))
+        
         # Thêm dữ liệu mới
-        for comic in self.all_comics:
-            row = self.results_table.rowCount()
-            self.results_table.insertRow(row)
-            
+        for row, comic in enumerate(self.all_comics):
             # Checkbox
             checkbox = QTableWidgetItem()
             checkbox.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
@@ -304,19 +324,110 @@ class WebsiteTab(QWidget):
                 luot_danh_gia_item.setData(Qt.ItemDataRole.DisplayRole, int(comic.get("luot_danh_gia", 0)))
                 self.results_table.setItem(row, 8, luot_danh_gia_item)
             
-            nguon = comic.get("nguon", "TruyenQQ")
-            rating_calculator = RatingFactory.get_calculator(nguon)
-            base_rating = rating_calculator.calculate(comic)
-            
-            base_rating_item = QTableWidgetItem()
-            base_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(base_rating))
-            self.results_table.setItem(row, 9, base_rating_item)
-        
+            # Hiển thị "Đang chờ..." cho cột rating cơ bản
+            self.results_table.setItem(row, 9, QTableWidgetItem("Đang chờ..."))
             self.results_table.setItem(row, 10, QTableWidgetItem(comic.get("trang_thai", "")))
         
         # Bật lại tính năng sorting
         self.results_table.setSortingEnabled(True)
+    
+    def start_batch_processing(self):
+        """Bắt đầu xử lý rating theo batch"""
+        # Dừng timer nếu đang chạy
+        if self.batch_timer.isActive():
+            self.batch_timer.stop()
         
+        # Tính toán số batch
+        self.total_batches = (len(self.all_comics) + self.batch_size - 1) // self.batch_size
+        self.current_batch = 0
+        
+        # Cập nhật progress bar
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        
+        # Bắt đầu xử lý batch đầu tiên
+        self.process_next_batch()
+        
+        logger.info(f"Bắt đầu tính toán rating theo lô: {self.total_batches} lô, mỗi lô {self.batch_size} truyện")
+    
+    def process_next_batch(self):
+        """Xử lý batch tiếp theo"""
+        if self.current_batch >= self.total_batches:
+            # Đã xử lý xong tất cả batch
+            self.on_all_batches_complete()
+            return
+        
+        # Tính index bắt đầu và kết thúc của batch hiện tại
+        start_idx = self.current_batch * self.batch_size
+        end_idx = min(start_idx + self.batch_size, len(self.all_comics))
+        
+        # Lấy truyện cho batch hiện tại
+        current_batch_comics = self.all_comics[start_idx:end_idx]
+        
+        # Cập nhật trạng thái các dòng trước khi tính toán
+        for i in range(start_idx, end_idx):
+            self.results_table.setItem(i, 9, QTableWidgetItem("Đang tính..."))
+            QApplication.processEvents()  # Cập nhật UI ngay lập tức
+        
+        # Tạo và chạy thread tính toán rating cho batch hiện tại
+        self.rating_thread = RatingCalculationThread(current_batch_comics, min(8, len(current_batch_comics)))
+        self.rating_thread.progress_updated.connect(lambda p: self.update_batch_progress(p))
+        self.rating_thread.calculation_finished.connect(lambda results: self.on_batch_complete(results, start_idx))
+        self.rating_thread.start()
+        
+        # logger.info(f"Đang xử lý lô {self.current_batch + 1}/{self.total_batches}, từ {start_idx} đến {end_idx-1}")
+    
+    def update_batch_progress(self, progress):
+        """Cập nhật tiến trình cho batch hiện tại"""
+        # Tính toán tiến trình tổng thể: tiến trình của batch hiện tại + các batch đã hoàn thành
+        overall_progress = (self.current_batch * 100 + progress) // self.total_batches
+        self.progress_bar.setValue(overall_progress)
+        QApplication.processEvents()
+    
+    def on_batch_complete(self, results, start_idx):
+        """Xử lý khi một batch hoàn thành"""
+        # Cập nhật kết quả lên UI
+        for result in results:
+            index = result.get("index")
+            global_index = start_idx + index
+            base_rating = result.get("base_rating")
+            
+            # Lưu vào cache kết quả
+            self.rating_results[global_index] = base_rating
+            
+            # Cập nhật UI
+            base_rating_item = QTableWidgetItem()
+            base_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(base_rating))
+            
+            if global_index < self.results_table.rowCount():
+                self.results_table.setItem(global_index, 9, base_rating_item)
+        
+        # Tăng batch hiện tại
+        self.current_batch += 1
+        
+        # Hiển thị thông báo tiến độ
+        batch_percent = (self.current_batch * 100) // self.total_batches
+        self.progress_bar.setValue(batch_percent)
+        
+        # Delay nhỏ trước khi xử lý batch tiếp theo để cho phép UI cập nhật
+        self.batch_timer.start(100)  # 100ms delay
+    
+    def on_all_batches_complete(self):
+        """Xử lý khi tất cả batch đã hoàn thành"""
+        # Ẩn progress bar
+        self.progress_bar.setVisible(False)
+        
+        # Dừng timer
+        self.batch_timer.stop()
+        
+        # Hiển thị thông báo hoàn thành
+        QMessageBox.information(
+            self, "Thông báo", 
+            f"Đã hoàn thành tính toán rating cho {len(self.all_comics)} truyện"
+        )
+        
+        logger.info(f"Đã hoàn thành tính toán rating cho tất cả {len(self.all_comics)} truyện")
+    
     def on_website_changed(self, website):
         """
         Xử lý khi website được chọn thay đổi
@@ -328,6 +439,14 @@ class WebsiteTab(QWidget):
         if self.is_crawling:
             QMessageBox.warning(self, "Cảnh báo", "Không thể thay đổi website khi đang crawl!")
             return
+        
+        # Dừng bất kỳ quá trình tính toán rating nào đang chạy
+        if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
+            self.rating_thread.terminate()
+            self.rating_thread.wait()
+        
+        if self.batch_timer.isActive():
+            self.batch_timer.stop()
         
         # Đặt nguồn dữ liệu
         self.db_manager.set_source(website)
@@ -378,6 +497,14 @@ class WebsiteTab(QWidget):
         
         if reply == QMessageBox.StandardButton.No:
             return
+        
+        # Dừng bất kỳ quá trình tính toán rating nào đang chạy
+        if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
+            self.rating_thread.terminate()
+            self.rating_thread.wait()
+        
+        if self.batch_timer.isActive():
+            self.batch_timer.stop()
         
         # Đặt nguồn dữ liệu
         self.db_manager.set_source(website)
@@ -434,14 +561,17 @@ class WebsiteTab(QWidget):
         # Lấy danh sách truyện
         self.all_comics = self.db_manager.get_all_comics()
         
-        # Hiển thị danh sách truyện
-        self.populate_results_table()
-        
-        # Hiển thị thông báo
+        # Hiển thị thông báo crawl hoàn tất
         QMessageBox.information(
             self, "Thông báo", 
             f"Đã crawl xong {result.get('count', 0)} truyện từ {result.get('website', '')} trong {result.get('time_taken', 0):.2f} giây"
         )
+        
+        # Hiển thị dữ liệu và bắt đầu tính toán rating
+        self.display_all_comics()
+        
+        # Tính toán rating theo batch
+        self.start_batch_processing()
         
         logger.info(f"Đã crawl xong {result.get('count', 0)} truyện từ {result.get('website', '')}")
     
@@ -487,3 +617,16 @@ class WebsiteTab(QWidget):
         QMessageBox.information(self, "Thông báo", f"Đã chọn {len(self.checked_comics)} truyện để phân tích")
         
         logger.info(f"Đã chọn {len(self.checked_comics)} truyện để phân tích")
+    
+    def closeEvent(self, event):
+        """Xử lý khi tab bị đóng"""
+        # Dừng timer nếu đang chạy
+        if self.batch_timer.isActive():
+            self.batch_timer.stop()
+            
+        # Dừng thread nếu đang chạy
+        if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
+            self.rating_thread.terminate()
+            self.rating_thread.wait()
+            
+        event.accept()

@@ -73,7 +73,7 @@ class NetTruyenRatingCalculator:
             # Đảm bảo điểm nằm trong khoảng 0-10
             base_rating = max(0, min(10, base_rating))
             
-            logger.debug(f"Điểm cơ bản NetTruyen cho '{comic_data.get('ten_truyen')}': {base_rating:.2f}")
+            # logger.debug(f"Điểm cơ bản NetTruyen cho '{comic_data.get('ten_truyen')}': {base_rating:.2f}")
             return base_rating
             
         except Exception as e:

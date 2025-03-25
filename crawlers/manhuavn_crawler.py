@@ -33,28 +33,57 @@ class ManhuavnCrawler(BaseCrawler):
         logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
         
     def setup_driver(self):
-        """Khởi tạo trình duyệt Chrome"""
+        """Khởi tạo trình duyệt Chrome với tùy chọn vô hiệu hóa TensorFlow"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--lang=vi")
+        
+        # Vô hiệu hóa TensorFlow và các tính năng ML
+        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees")
+        chrome_options.add_argument("--disable-machine-learning")
+        chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
+        
+        # Vô hiệu hóa WebGL và GPU acceleration (có thể dùng TensorFlow)
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-webgl")
+        
+        # Giảm tài nguyên sử dụng bởi Chrome
+        chrome_options.add_argument("--js-flags=--expose-gc")
+        chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument("--disable-extensions")
+        
+        # Vô hiệu hóa logging
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        
+        # Thiết lập biến môi trường để vô hiệu hóa TensorFlow logging
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 3 = ERROR, vô hiệu hóa INFO và WARNING
         
         try:
             # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = self.config_manager.get_chrome_driver_path()
+            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
             
             # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
-                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
-                return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
+                # logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                service = Service(chromedriver_path)
+                service.log_path = os.devnull  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(service=service, options=chrome_options)
             else:
                 # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm
-                return webdriver.Chrome(options=chrome_options)
+                service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(service=service, options=chrome_options)
+                    
         except Exception as e:
-            # logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
-            # Fallback: thử không sử dụng Service
-            return webdriver.Chrome(options=chrome_options)
+            logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
+            try:
+                # Fallback: thử không sử dụng Service
+                return webdriver.Chrome(options=chrome_options)
+            except Exception as e2:
+                logger.critical(f"Lỗi nghiêm trọng khi khởi tạo Chrome driver: {e2}")
+                raise RuntimeError(f"Không thể khởi tạo Chrome driver: {e2}")
     
     def get_text_safe(self, element, selector):
         """Trích xuất nội dung văn bản an toàn từ phần tử"""
@@ -62,6 +91,26 @@ class ManhuavnCrawler(BaseCrawler):
             return element.find_element(By.CSS_SELECTOR, selector).text.strip()
         except Exception:
             return "N/A"
+    
+    def parse_number(self, text):
+        """Chuyển đổi các số có đơn vị K, M thành số nguyên."""
+        if not text or text == "N/A":
+            return 0
+
+        text = text.lower().strip()
+        multiplier = 1
+
+        if "k" in text:
+            multiplier = 1000
+            text = text.replace("k", "")
+        elif "m" in text:
+            multiplier = 1000000
+            text = text.replace("m", "")
+
+        try:
+            return int(float(text) * multiplier)
+        except ValueError:
+            return 0
     
     def crawl_basic_data(self, progress_callback=None):
         """Crawl dữ liệu cơ bản từ Manhuavn"""
@@ -190,7 +239,7 @@ class ManhuavnCrawler(BaseCrawler):
             
         logger.info(f"Đã tìm thấy {len(stories)} truyện để crawl")
         return stories
-    
+        
     def get_story_details(self, story):
         """Lấy thông tin chi tiết của truyện"""
         driver = self.setup_driver()
@@ -202,7 +251,7 @@ class ManhuavnCrawler(BaseCrawler):
             # Lấy thông tin chi tiết
             story["Tình trạng"] = self.get_text_safe(driver, ".info-row .contiep")
             story["Lượt theo dõi"] = self.get_text_safe(driver, "li.info-row strong")
-            story["Lượt xem"] = self.get_text_safe(driver, "li.info-row view.colorblue")
+            story["Lượt xem"] = self.parse_number(self.get_text_safe(driver, "li.info-row view.colorblue"))
             story["Đánh giá"] = self.get_text_safe(driver, 'span[itemprop="ratingValue"]')
             story["Lượt đánh giá"] = self.get_text_safe(driver, 'span[itemprop="ratingCount"]')
             story["Mô tả"] = self.get_text_safe(driver, "li.clearfix p")
@@ -219,13 +268,13 @@ class ManhuavnCrawler(BaseCrawler):
             except:
                 story["Tác giả"] = "N/A"
                 
-            # Lấy thể loại
-            try:
-                genre_elements = driver.find_elements(By.CSS_SELECTOR, "li.kind.row a")
-                genres = [genre.text.strip() for genre in genre_elements if genre.text.strip()]
-                story["Thể loại"] = ", ".join(genres)
-            except Exception:
-                story["Thể loại"] = "Chưa phân loại"
+            # # Lấy thể loại
+            # try:
+            #     genre_elements = driver.find_elements(By.CSS_SELECTOR, "li.kind.row a")
+            #     genres = [genre.text.strip() for genre in genre_elements if genre.text.strip()]
+            #     story["Thể loại"] = ", ".join(genres)
+            # except Exception:
+            #     story["Thể loại"] = "Chưa phân loại"
 
         except Exception as e:
             logger.error(f"Lỗi khi lấy thông tin chi tiết truyện {story.get('Tên truyện')}: {e}")
@@ -241,11 +290,11 @@ class ManhuavnCrawler(BaseCrawler):
         return {
             "ten_truyen": raw_comic.get("Tên truyện", ""),
             "tac_gia": raw_comic.get("Tác giả", "N/A"),
-            "the_loai": raw_comic.get("Thể loại", ""),
+            # "the_loai": raw_comic.get("Thể loại", ""),
             "mo_ta": raw_comic.get("Mô tả", ""),
             "link_truyen": raw_comic.get("Link truyện", ""),
             "so_chuong": int(raw_comic.get("Số chương", "0")) if raw_comic.get("Số chương", "0").isdigit() else 0,
-            "luot_xem": self.extract_number(raw_comic.get("Lượt xem", "0")),
+            "luot_xem": raw_comic.get("Lượt xem", "0"),
             "luot_theo_doi": self.extract_number(raw_comic.get("Lượt theo dõi", "0")),
             "danh_gia": raw_comic.get("Đánh giá", "0"),
             "luot_danh_gia": self.extract_number(raw_comic.get("Lượt đánh giá", "0")),

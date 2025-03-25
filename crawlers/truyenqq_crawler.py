@@ -35,7 +35,7 @@ class TruyenQQCrawler(BaseCrawler):
         }
     
     def create_chrome_driver(self):
-        """Tạo và cấu hình Chrome WebDriver"""
+        """Tạo và cấu hình Chrome WebDriver với các tùy chọn vô hiệu hóa TensorFlow"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -43,23 +43,59 @@ class TruyenQQCrawler(BaseCrawler):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
         
+        # Vô hiệu hóa TensorFlow và các tính năng ML
+        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees")
+        chrome_options.add_argument("--disable-machine-learning")
+        chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
+        
+        # Vô hiệu hóa WebGL và GPU acceleration (có thể dùng TensorFlow)
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-webgl")
+        chrome_options.add_argument("--disable-webgl2")
+        
+        # Giảm tài nguyên sử dụng bởi Chrome
+        chrome_options.add_argument("--js-flags=--expose-gc")
+        chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-popup-blocking")
+        
+        # Vô hiệu hóa plugins và plugins on demand
+        chrome_options.add_argument("--disable-plugins-discovery")
+        chrome_options.add_argument("--disable-default-apps")
+        
+        # Thêm các biến môi trường cho Chrome process
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        chrome_options.add_experimental_option('prefs', {
+            'download_restrictions': 3,
+            'profile.default_content_settings.popups': 0,
+            'profile.managed_default_content_settings.images': 2  # 2 = không tải hình ảnh
+        })
+        
         try:
-            # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = self.config_manager.get_chrome_driver_path()
+            # Thiết lập biến môi trường để vô hiệu hóa TensorFlow logging
+            os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 3 = ERROR, vô hiệu hóa INFO và WARNING
+            os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
             
-            # Kiểm tra xem chromedriver_path có tồn tại không
+            # Lấy đường dẫn đến ChromeDriver
+            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
+            
             if chromedriver_path and os.path.exists(chromedriver_path):
-                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
-                return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
+                # logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
+                service = Service(chromedriver_path)
+                service.log_path = os.devnull  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(service=service, options=chrome_options)
             else:
-                # Nếu không có đường dẫn hoặc không tồn tại, để Selenium tự tìm chromedriver
-                # logger.warning("Không tìm thấy ChromeDriver, sử dụng mặc định của hệ thống")
-                return webdriver.Chrome(options=chrome_options)
+                service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
+                return webdriver.Chrome(options=chrome_options, service=service)
                 
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
-            # Fallback: thử không sử dụng Service
-            return webdriver.Chrome(options=chrome_options)
+            try:
+                # Fallback mode
+                return webdriver.Chrome(options=chrome_options)
+            except Exception as e2:
+                logger.critical(f"Lỗi nghiêm trọng khi khởi tạo Chrome driver: {e2}")
+                raise RuntimeError(f"Không thể khởi tạo Chrome driver: {e2}")
     
     def get_text_safe(self, element, selector):
         """Trích xuất nội dung văn bản an toàn từ một phần tử sử dụng bộ chọn CSS"""
@@ -288,10 +324,10 @@ class TruyenQQCrawler(BaseCrawler):
                 comic["luot_theo_doi"] = self.get_text_safe(driver, "li:nth-child(4) p.col-xs-9")
                 comic["luot_xem"] = self.get_text_safe(driver, "li:nth-child(5) p.col-xs-9")
             
-            # Lấy thể loại
-            genre_elems = driver.find_elements(By.CSS_SELECTOR, "li.kind.row p.col-xs-9 a")
-            the_loai = ", ".join([elem.text.strip() for elem in genre_elems]) if genre_elems else "N/A"
-            comic["the_loai"] = the_loai
+            # # Lấy thể loại
+            # genre_elems = driver.find_elements(By.CSS_SELECTOR, "li.kind.row p.col-xs-9 a")
+            # the_loai = ", ".join([elem.text.strip() for elem in genre_elems]) if genre_elems else "N/A"
+            # comic["the_loai"] = the_loai
             
             # Cố gắng nhấp vào "Xem thêm" nếu có để lấy mô tả đầy đủ
             try:

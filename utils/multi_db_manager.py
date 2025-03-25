@@ -10,7 +10,7 @@ class MultipleDBManager:
     Quản lý nhiều database cho các nguồn dữ liệu khác nhau
     """
     
-    def __init__(self, db_folder="database"):
+    def __init__(self, db_folder="database", pool_size=5):
         """
         Khởi tạo MultipleDBManager
         
@@ -19,6 +19,8 @@ class MultipleDBManager:
         """
         self.db_folder = db_folder
         self.current_source = None
+        self.pool_size = pool_size
+        self.connections_pools = [] # Pool kết nối SQLite
         
         # Tạo thư mục database nếu chưa tồn tại
         os.makedirs(db_folder, exist_ok=True)
@@ -166,9 +168,62 @@ class MultipleDBManager:
         logger.info(f"Đã thiết lập nguồn dữ liệu: {source}")
         return True
     
+    def _initialize_pool(self, source):
+        """Khởi tạo connection pool cho nguồn dữ liệu"""
+        if source not in self.connection_pools:
+            self.connection_pools[source] = []
+            db_file = os.path.join(self.db_folder, self.supported_sources[source]["file"])
+            
+            # Tạo các kết nối cho pool
+            for _ in range(self.pool_size):
+                conn = sqlite3.connect(db_file, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                
+                # Tạo bảng nếu cần
+                cursor = conn.cursor()
+                for table_name, schema in self.supported_sources[source]["tables"].items():
+                    cursor.execute(schema)
+                conn.commit()
+                
+                self.connection_pools[source].append(conn)
+            
+            logger.info(f"Đã khởi tạo connection pool cho nguồn: {source}")
+
+    def _get_connection_from_pool(self):
+        """Lấy kết nối từ pool, tạo mới nếu pool rỗng"""
+        if not self.current_source:
+            raise ValueError("Chưa đặt nguồn dữ liệu hiện tại")
+        
+        # Khởi tạo pool nếu chưa có
+        if self.current_source not in self.connection_pools:
+            self._initialize_pool(self.current_source)
+        
+        # Lấy connection từ pool
+        if self.connection_pools[self.current_source]:
+            return self.connection_pools[self.current_source].pop()
+        else:
+            # Nếu hết connection, tạo mới
+            db_file = os.path.join(self.db_folder, self.supported_sources[self.current_source]["file"])
+            conn = sqlite3.connect(db_file, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+    def _return_connection_to_pool(self, conn):
+        """Trả kết nối về pool"""
+        if not self.current_source:
+            conn.close()
+            return
+        
+        if self.current_source in self.connection_pools:
+            # Chỉ giữ số lượng connection giới hạn trong pool
+            if len(self.connection_pools[self.current_source]) < self.pool_size:
+                self.connection_pools[self.current_source].append(conn)
+            else:
+                conn.close()
+    
     def get_connection(self):
         """
-        Lấy kết nối đến database hiện tại
+        Lấy kết nối đến database hiện tại - Giữ lại cho các phương thức cũ
         
         Returns:
             SQLite connection
@@ -176,6 +231,11 @@ class MultipleDBManager:
         if not self.current_source:
             raise ValueError("Chưa đặt nguồn dữ liệu hiện tại")
         
+        # Sử dụng pool nếu có
+        if hasattr(self, 'connection_pools') and self.current_source in self.connection_pools:
+            return self._get_connection_from_pool()
+        
+        # Fallback to old method
         db_file = os.path.join(self.db_folder, self.supported_sources[self.current_source]["file"])
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row
@@ -187,6 +247,175 @@ class MultipleDBManager:
         conn.commit()
         
         return conn
+    
+    def save_comics_batch(self, comics_list):
+        """
+        Lưu nhiều truyện vào database trong một transaction
+        
+        Args:
+            comics_list: List dictionary chứa dữ liệu nhiều truyện
+                
+        Returns:
+            list: List các ID của truyện đã lưu
+        """
+        if not self.current_source or not comics_list:
+            return []
+        
+        conn = self._get_connection_from_pool()
+        cursor = conn.cursor()
+        comic_ids = []
+        
+        try:
+            # Bắt đầu transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            for comic in comics_list:
+                # Xác định nguồn dữ liệu hiện tại - code tương tự như save_comic()
+                if self.current_source == "TruyenQQ":
+                    query = """
+                        INSERT OR REPLACE INTO comics 
+                        (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                        luot_xem, luot_thich, luot_theo_doi, so_binh_luan, trang_thai, nguon)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        comic.get("ten_truyen", ""),
+                        comic.get("tac_gia", "N/A"),
+                        comic.get("the_loai", ""),
+                        comic.get("mo_ta", ""),
+                        comic.get("link_truyen", ""),
+                        comic.get("so_chuong", 0),
+                        comic.get("luot_xem", 0),
+                        comic.get("luot_thich", 0),
+                        comic.get("luot_theo_doi", 0),
+                        comic.get("so_binh_luan", 0),
+                        comic.get("trang_thai", ""),
+                        comic.get("nguon", "TruyenQQ")
+                    )
+                elif self.current_source == "NetTruyen":
+                    query = """
+                        INSERT OR REPLACE INTO comics 
+                        (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                        luot_xem, luot_thich, luot_theo_doi, rating, luot_danh_gia, 
+                        so_binh_luan, trang_thai, nguon)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        comic.get("ten_truyen", ""),
+                        comic.get("tac_gia", "N/A"),
+                        comic.get("the_loai", ""),
+                        comic.get("mo_ta", ""),
+                        comic.get("link_truyen", ""),
+                        comic.get("so_chuong", 0),
+                        comic.get("luot_xem", 0),
+                        comic.get("luot_thich", 0),
+                        comic.get("luot_theo_doi", 0),
+                        comic.get("rating", ""),
+                        comic.get("luot_danh_gia", 0),
+                        comic.get("so_binh_luan", 0),
+                        comic.get("trang_thai", ""),
+                        comic.get("nguon", "NetTruyen")
+                    )
+                elif self.current_source == "Manhuavn":
+                    query = """
+                        INSERT OR REPLACE INTO comics 
+                        (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                        luot_xem, luot_theo_doi, danh_gia, luot_danh_gia, 
+                        trang_thai, nguon)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        comic.get("ten_truyen", ""),
+                        comic.get("tac_gia", "N/A"),
+                        comic.get("the_loai", ""),
+                        comic.get("mo_ta", ""),
+                        comic.get("link_truyen", ""),
+                        comic.get("so_chuong", 0),
+                        comic.get("luot_xem", 0),
+                        comic.get("luot_theo_doi", 0),
+                        comic.get("danh_gia", ""),
+                        comic.get("luot_danh_gia", 0),
+                        comic.get("trang_thai", ""),
+                        comic.get("nguon", "Manhuavn")
+                    )
+                    
+                cursor.execute(query, params)
+                
+                # Lấy ID của truyện vừa thêm/cập nhật
+                cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic.get("link_truyen", ""),))
+                result = cursor.fetchone()
+                
+                if result:
+                    comic_ids.append(result["id"])
+            
+            # Commit transaction chỉ một lần cho tất cả records
+            conn.commit()
+            logger.info(f"Đã lưu batch {len(comics_list)} truyện vào DB")
+            return comic_ids
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu batch truyện: {str(e)}")
+            conn.rollback()
+            return []
+        finally:
+            self._return_connection_to_pool(conn)
+            
+    def save_comments_batch(self, comments_batch):
+        """
+        Lưu nhiều bình luận từ nhiều truyện vào database trong một transaction
+        
+        Args:
+            comments_batch: Dictionary với key là comic_id và value là list comments
+        """
+        if not self.current_source or not comments_batch:
+            return
+        
+        conn = self._get_connection_from_pool()
+        cursor = conn.cursor()
+        
+        try:
+            # Bắt đầu transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            total_comments = 0
+            
+            for comic_id, comments in comments_batch.items():
+                if not comments:
+                    continue
+                    
+                # Xóa comments cũ
+                cursor.execute("DELETE FROM comments WHERE comic_id = ?", (comic_id,))
+                
+                # Chuẩn bị dữ liệu cho executemany
+                comment_params = [
+                    (
+                        comic_id,
+                        comment.get("ten_nguoi_binh_luan", ""),
+                        comment.get("noi_dung", ""),
+                        comment.get("sentiment", ""),
+                        comment.get("sentiment_score", 0)
+                    )
+                    for comment in comments
+                ]
+                
+                # Thêm comments mới với executemany (nhanh hơn execute nhiều lần)
+                cursor.executemany('''
+                    INSERT INTO comments 
+                    (comic_id, ten_nguoi_binh_luan, noi_dung, sentiment, sentiment_score)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', comment_params)
+                
+                total_comments += len(comments)
+            
+            # Commit transaction
+            conn.commit()
+            logger.info(f"Đã lưu tổng cộng {total_comments} bình luận cho {len(comments_batch)} truyện")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu batch bình luận: {str(e)}")
+            conn.rollback()
+        finally:
+            self._return_connection_to_pool(conn)        
     
     def save_comic(self, comic):
         """
@@ -279,6 +508,10 @@ class MultipleDBManager:
                 
             cursor.execute(query, params)
             conn.commit()
+            
+            # Lấy ID của truyện vừa thêm/cập nhật
+            cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic.get("link_truyen", ""),))
+            result = cursor.fetchone()
             
             # Lấy ID của truyện vừa thêm/cập nhật
             cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic.get("link_truyen", ""),))

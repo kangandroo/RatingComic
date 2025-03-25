@@ -106,8 +106,8 @@ class ManhuavnRatingCalculator(BaseRatingCalculator):
             # Đảm bảo điểm nằm trong thang 0-10
             base_rating = min(10.0, max(0.0, base_rating))
             
-            logger.info(f"Tính điểm ManhuavnRatingCalculator: view_score={view_score:.2f}, follower_score={follower_score:.2f}, " 
-                       f"chapter_score={chapter_score:.2f}, rating_score={rating_score:.2f}, base_rating={base_rating:.2f}")
+            # logger.info(f"Tính điểm ManhuavnRatingCalculator: view_score={view_score:.2f}, follower_score={follower_score:.2f}, " 
+            #            f"chapter_score={chapter_score:.2f}, rating_score={rating_score:.2f}, base_rating={base_rating:.2f}")
             
             return base_rating
             
