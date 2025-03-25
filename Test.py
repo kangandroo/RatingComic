@@ -1,27 +1,28 @@
 import sqlite3
 
-def fetch_comments(db_path):
+def fetch_db_structure(db_path):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Lấy tất cả dữ liệu từ bảng comments
-    cursor.execute("SELECT * FROM comments;")
-    rows = cursor.fetchall()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
 
-    # Lấy danh sách tên cột
-    columns = [desc[0] for desc in cursor.description]
+    print("📌 Danh sách các bảng trong database:")
+    for table in tables:
+        table_name = table[0]
+        print(f"\n🔹 Bảng: {table_name}")
 
-    print("\n📌 Dữ liệu trong bảng comments:")
-    print("────────────────────────────────────────────────────────────")
-    print(" | ".join(columns))  # In tên cột
-    print("────────────────────────────────────────────────────────────")
-    
-    for row in rows[:10]:  # Giới hạn 10 dòng đầu
-        print(" | ".join(str(cell) for cell in row))
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        columns = cursor.fetchall()
+
+        print("────────────────────────────────────────────────────────────")
+        print("ID | Tên cột | Kiểu dữ liệu | NOT NULL | Default | Primary Key")
+        print("────────────────────────────────────────────────────────────")
+        for col in columns:
+            print(" | ".join(str(c) for c in col))
     
     conn.close()
 
-# Chạy hàm với đường dẫn file SQLite
-db_path = r"C:\Users\Hi\rating_comic\code\RatingComic\database\truyenqq.db"  # Thay bằng đường dẫn thực tế của bạn
-fetch_comments(db_path)
 
+db_path = r"C:\Users\Hi\rating_comic\code\RatingComic\database\nettruyen.db"  # Thay bằng đường dẫn thực tế của bạn
+fetch_db_structure(db_path)

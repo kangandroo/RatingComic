@@ -24,36 +24,40 @@ class RatingCalculationThread(QThread):
         }
     
     def run(self):
-        results = []
+        try:
+            results = []
         
-        # Sử dụng ThreadPoolExecutor để xử lý đa luồng
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Tạo future cho mỗi comic
-            future_to_comic = {
-                executor.submit(self.calculate_base_rating, comic, index): (comic, index)
-                for index, comic in enumerate(self.comics)
-            }
-            
-            # Xử lý kết quả khi hoàn thành
-            completed = 0
-            for future in concurrent.futures.as_completed(future_to_comic):
-                comic, index = future_to_comic[future]
-                try:
-                    rating_result = future.result()
-                    results.append(rating_result)
-                except Exception as e:
-                    logger.error(f"Lỗi khi tính rating cho truyện {comic.get('ten_truyen')}: {str(e)}")
+            # Sử dụng ThreadPoolExecutor để xử lý đa luồng
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Tạo future cho mỗi comic
+                future_to_comic = {
+                    executor.submit(self.calculate_base_rating, comic, index): (comic, index)
+                    for index, comic in enumerate(self.comics)
+                }
                 
-                # Cập nhật tiến độ
-                completed += 1
-                progress = int(completed / len(self.comics) * 100)
-                self.progress_updated.emit(progress)
+                # Xử lý kết quả khi hoàn thành
+                completed = 0
+                for future in concurrent.futures.as_completed(future_to_comic):
+                    comic, index = future_to_comic[future]
+                    try:
+                        rating_result = future.result()
+                        results.append(rating_result)
+                    except Exception as e:
+                        logger.error(f"Lỗi khi tính rating cho truyện {comic.get('ten_truyen')}: {str(e)}")
+                    
+                    # Cập nhật tiến độ
+                    completed += 1
+                    progress = int(completed / len(self.comics) * 100)
+                    self.progress_updated.emit(progress)
         
-        # Sắp xếp kết quả theo thứ tự ban đầu
-        results.sort(key=lambda x: x["index"])
-        
-        # Hoàn thành tính toán
-        self.calculation_finished.emit(results)
+            # Sắp xếp kết quả theo thứ tự ban đầu
+            results.sort(key=lambda x: x["index"])
+            
+            # Hoàn thành tính toán
+            self.calculation_finished.emit(results)            
+        except Exception as e:
+            logger.error(f"Lỗi khi tính toán rating: {str(e)}")
+            self.calculation_finished.emit([])
     
     def calculate_base_rating(self, comic, index):
         """Tính điểm cơ bản cho một truyện"""
