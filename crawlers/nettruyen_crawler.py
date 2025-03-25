@@ -60,7 +60,7 @@ class NetTruyenCrawler(BaseCrawler):
         
         try:
             # Lấy đường dẫn đến ChromeDriver từ config
-            chromedriver_path = r"C:\Users\Hi\rating_comic\code\RatingComic\crawlers\chromedriver.exe"
+            chromedriver_path = self.config_manager.get_chrome_driver_path()
             
             # Kiểm tra xem chromedriver_path có tồn tại không
             if chromedriver_path and os.path.exists(chromedriver_path):
