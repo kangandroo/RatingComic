@@ -357,8 +357,19 @@ class TruyenQQCrawler(BaseCrawler):
             comic_url = comic["link_truyen"]
             logger.debug(f"Đang crawl chi tiết truyện: {comic_url}")
             
-            driver.get(comic_url)
-            time.sleep(random.uniform(1, 2))
+            for attempt in range(5):
+                try:
+                    driver.get(comic_url)
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "li.author.row p.col-xs-9 a"))
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    time.sleep(random.uniform(2, 4))
+            else:
+                logger.error("Không thể truy cập trang sau 3 lần thử")
+                return comic
             
             # Kiểm tra xem có phần tử tên khác không
             ten_khac_element = driver.find_elements(By.CSS_SELECTOR, "li.othername.row h2")

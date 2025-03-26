@@ -311,8 +311,19 @@ class ManhuavnCrawler(BaseCrawler):
         driver = self.setup_driver()
         
         try:
-            driver.get(story["Link truyện"])
-            time.sleep(random.uniform(2, 3))
+            for attempt in range(5):
+                try:
+                    driver.get(story["Link truyện"])
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, ".info-row .contiep"))
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    time.sleep(random.uniform(2, 4))
+            else:
+                logger.error("Không thể truy cập trang sau 3 lần thử")
+                return comic
 
             # Lấy thông tin chi tiết
             story["Tình trạng"] = self.get_text_safe(driver, ".info-row .contiep")
