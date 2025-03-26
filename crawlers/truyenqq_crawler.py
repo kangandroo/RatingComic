@@ -262,19 +262,19 @@ class TruyenQQCrawler(BaseCrawler):
                         
                     except Exception as e:
                         logger.warning(f"Không thể lấy dữ liệu từ trang {page_num}: {str(e)}")
-                        break  # Gặp lỗi, dừng vòng lặp
+                        break  
                         
                 except Exception as e:
                     logger.error(f"Lỗi khi truy cập trang {page_num}: {str(e)}")
-                    break  # Gặp lỗi, dừng vòng lặp
+                    break  
                     
                 finally:
                     driver.quit()
                     # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn
                     time.sleep(random.uniform(1, 3))
             
-            # Xử lý chi tiết từng truyện
-            logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
+            # # Xử lý chi tiết từng truyện
+            # logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
             
             # Biến đếm cho số lượng truyện đã xử lý
             processed_count = 0
@@ -365,10 +365,10 @@ class TruyenQQCrawler(BaseCrawler):
                     )
                     break
                 except Exception as e:
-                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    logger.warning(f"Thử lần {attempt + 1}")
                     time.sleep(random.uniform(2, 4))
             else:
-                logger.error("Không thể truy cập trang sau 3 lần thử")
+                logger.error("Không thể truy cập trang sau 5 lần thử")
                 return comic
             
             # Kiểm tra xem có phần tử tên khác không

@@ -31,12 +31,14 @@ class WebsiteTab(QWidget):
         self.checked_comics = []
         
         # Thêm biến cho xử lý batch
-        self.batch_size = 20  # Số truyện xử lý mỗi lần
+        self.rating_completed = False
+        self.rating_in_progress = False
+        self.batch_size = 50  
         self.current_batch = 0
         self.total_batches = 0
         self.batch_timer = QTimer(self)
         self.batch_timer.timeout.connect(self.process_next_batch)
-        self.rating_results = {}  # Lưu kết quả rating
+        self.rating_results = {} 
         
         # Thiết lập UI
         self.init_ui()
@@ -333,6 +335,9 @@ class WebsiteTab(QWidget):
     
     def start_batch_processing(self):
         """Bắt đầu xử lý rating theo batch"""
+        self.rating_completed = False
+        self.rating_in_progress = True
+        
         # Dừng timer nếu đang chạy
         if self.batch_timer.isActive():
             self.batch_timer.stop()
@@ -367,7 +372,14 @@ class WebsiteTab(QWidget):
         # Cập nhật trạng thái các dòng trước khi tính toán
         for i in range(start_idx, end_idx):
             self.results_table.setItem(i, 9, QTableWidgetItem("Đang tính..."))
-            QApplication.processEvents()  # Cập nhật UI ngay lập tức
+            QApplication.processEvents()  
+            
+        if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
+            try:
+                self.rating_thread.calculation_finished.disconnect()
+                self.rating_thread.progress_updated.disconnect()
+            except:
+                pass    
         
         # Tạo và chạy thread tính toán rating cho batch hiện tại
         self.rating_thread = RatingCalculationThread(current_batch_comics, min(8, len(current_batch_comics)))
@@ -414,17 +426,23 @@ class WebsiteTab(QWidget):
     
     def on_all_batches_complete(self):
         """Xử lý khi tất cả batch đã hoàn thành"""
+        
+        if self.rating_completed:
+            return  
+            
+        self.rating_completed = True
+        self.rating_in_progress = False        
+        
         # Ẩn progress bar
         self.progress_bar.setVisible(False)
         
         # Dừng timer
         self.batch_timer.stop()
         
-        # Hiển thị thông báo hoàn thành
-        QMessageBox.information(
-            self, "Thông báo", 
-            f"Đã hoàn thành tính toán rating cho {len(self.all_comics)} truyện"
-        )
+        # QMessageBox.information(
+        #     self, "Thông báo", 
+        #     f"Đã hoàn thành tính toán rating cho {len(self.all_comics)} truyện"
+        # )
         
         logger.info(f"Đã hoàn thành tính toán rating cho tất cả {len(self.all_comics)} truyện")
     
@@ -548,9 +566,6 @@ class WebsiteTab(QWidget):
     def on_crawl_complete(self, result):
         """
         Xử lý khi crawl hoàn tất
-        
-        Args:
-            result: Kết quả crawl
         """
         # Cập nhật trạng thái
         self.is_crawling = False

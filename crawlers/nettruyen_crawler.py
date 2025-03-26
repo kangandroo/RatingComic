@@ -232,6 +232,8 @@ class NetTruyenCrawler(BaseCrawler):
                             with lock:
                                 progress = (processed_count / len(raw_comics)) * 100
                                 progress_callback.emit(int(progress))
+                                
+                        logger.info(f"Đã hoàn thành {processed_count}/{len(raw_comics)} truyện")
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
@@ -354,10 +356,10 @@ class NetTruyenCrawler(BaseCrawler):
                     )
                     break
                 except Exception as e:
-                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    logger.warning(f"Thử lần {attempt + 1}")
                     time.sleep(random.uniform(2, 4))
             else:
-                logger.error("Không thể truy cập trang sau 3 lần thử")
+                logger.error("Không thể truy cập trang sau 5 lần thử")
                 return comic
 
             # Lấy thông tin cơ bản
