@@ -33,7 +33,7 @@ class WebsiteTab(QWidget):
         # Thêm biến cho xử lý batch
         self.rating_completed = False
         self.rating_in_progress = False
-        self.batch_size = 50  
+        self.batch_size = 50
         self.current_batch = 0
         self.total_batches = 0
         self.batch_timer = QTimer(self)
@@ -369,17 +369,23 @@ class WebsiteTab(QWidget):
         # Lấy truyện cho batch hiện tại
         current_batch_comics = self.all_comics[start_idx:end_idx]
         
-        # Cập nhật trạng thái các dòng trước khi tính toán
-        for i in range(start_idx, end_idx):
-            self.results_table.setItem(i, 9, QTableWidgetItem("Đang tính..."))
-            QApplication.processEvents()  
-            
+        update_indices = range(start_idx, end_idx, 10)  
+        for i in update_indices:
+            if i < self.results_table.rowCount():
+                self.results_table.setItem(i, 9, QTableWidgetItem("Đang tính..."))
+        
+        # Cập nhật toàn bộ UI ngay lập tức
+        QApplication.processEvents()
+        
+        # Dừng thread cũ nếu đang chạy
         if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
             try:
                 self.rating_thread.calculation_finished.disconnect()
                 self.rating_thread.progress_updated.disconnect()
-            except:
-                pass    
+                self.rating_thread.terminate()
+                self.rating_thread.wait(500)  
+            except Exception as e:
+                logger.warning(f"Lỗi khi dừng thread cũ: {str(e)}")    
         
         # Tạo và chạy thread tính toán rating cho batch hiện tại
         self.rating_thread = RatingCalculationThread(current_batch_comics, min(8, len(current_batch_comics)))
@@ -407,12 +413,23 @@ class WebsiteTab(QWidget):
             # Lưu vào cache kết quả
             self.rating_results[global_index] = base_rating
             
-            # Cập nhật UI
-            base_rating_item = QTableWidgetItem()
-            base_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(base_rating))
+        # Cập nhật UI theo đợt, không phải từng dòng
+        if self.results_table.rowCount() > 0:
+            # Tạm thời tắt sorting
+            was_sorting_enabled = self.results_table.isSortingEnabled()
+            if was_sorting_enabled:
+                self.results_table.setSortingEnabled(False)
+                
+            # Cập nhật UI hàng loạt
+            for global_index, base_rating in self.rating_results.items():
+                if global_index < self.results_table.rowCount():
+                    base_rating_item = QTableWidgetItem()
+                    base_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(base_rating))
+                    self.results_table.setItem(global_index, 9, base_rating_item)
             
-            if global_index < self.results_table.rowCount():
-                self.results_table.setItem(global_index, 9, base_rating_item)
+            # Bật lại sorting nếu trước đó đã bật
+            if was_sorting_enabled:
+                self.results_table.setSortingEnabled(True)
         
         # Tăng batch hiện tại
         self.current_batch += 1
@@ -421,6 +438,13 @@ class WebsiteTab(QWidget):
         batch_percent = (self.current_batch * 100) // self.total_batches
         self.progress_bar.setValue(batch_percent)
         
+        if len(self.rating_results) > self.batch_size * 2:
+            temp_results = {}
+            for i in range(self.current_batch * self.batch_size, min((self.current_batch + 1) * self.batch_size, len(self.all_comics))):
+                if i in self.rating_results:
+                    temp_results[i] = self.rating_results[i]
+            self.rating_results = temp_results
+            
         # Delay nhỏ trước khi xử lý batch tiếp theo để cho phép UI cập nhật
         self.batch_timer.start(100)  # 100ms delay
     
