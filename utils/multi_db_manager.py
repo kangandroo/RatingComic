@@ -20,7 +20,7 @@ class MultipleDBManager:
         self.db_folder = db_folder
         self.current_source = None
         self.pool_size = pool_size
-        self.connections_pools = [] # Pool kết nối SQLite
+        self.connection_pools = {}  # Pool kết nối SQLite theo nguồn
         
         # Tạo thư mục database nếu chưa tồn tại
         os.makedirs(db_folder, exist_ok=True)
@@ -61,6 +61,7 @@ class MultipleDBManager:
                     so_binh_luan INTEGER DEFAULT 0,
                     trang_thai TEXT,
                     nguon TEXT DEFAULT 'TruyenQQ',
+                    base_rating REAL DEFAULT NULL,
                     thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """,
@@ -98,6 +99,7 @@ class MultipleDBManager:
                     so_binh_luan INTEGER DEFAULT 0,
                     trang_thai TEXT,
                     nguon TEXT DEFAULT 'NetTruyen',
+                    base_rating REAL DEFAULT NULL,
                     thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """,
@@ -133,6 +135,7 @@ class MultipleDBManager:
                     luot_danh_gia INTEGER DEFAULT 0,
                     trang_thai TEXT,
                     nguon TEXT DEFAULT 'Manhuavn',
+                    base_rating REAL DEFAULT NULL,
                     thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """,
@@ -167,6 +170,80 @@ class MultipleDBManager:
         self.current_source = source
         logger.info(f"Đã thiết lập nguồn dữ liệu: {source}")
         return True
+    
+    def save_base_rating(self, comic_id, base_rating):
+        """Lưu điểm cơ bản vào database"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Cập nhật trường base_rating
+            cursor.execute(
+                "UPDATE comics SET base_rating = ? WHERE id = ?",
+                (base_rating, comic_id)
+            )
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu base_rating: {e}")
+            return False
+
+    def save_batch_ratings(self, ratings_data):
+        """Lưu nhiều rating cùng lúc"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Bắt đầu transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            for comic_id, rating in ratings_data.items():
+                cursor.execute(
+                    "UPDATE comics SET base_rating = ? WHERE id = ?",
+                    (rating, comic_id)
+                )
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu batch ratings: {e}")
+            if 'conn' in locals():
+                conn.rollback()
+                conn.close()
+            return False    
+    
+    def update_comics_rating(self, comics):
+        """Cập nhật rating của nhiều truyện cùng lúc"""
+        if not comics:
+            return False
+            
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Bắt đầu transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            for comic in comics:
+                cursor.execute(
+                    "UPDATE comics SET base_rating = ? WHERE id = ?",
+                    (comic.get("base_rating"), comic.get("id"))
+                )
+            
+            conn.commit()
+            logger.info(f"Đã cập nhật rating cho {len(comics)} truyện")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi cập nhật rating: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.close()
     
     def _initialize_pool(self, source):
         """Khởi tạo connection pool cho nguồn dữ liệu"""
@@ -220,10 +297,12 @@ class MultipleDBManager:
                 self.connection_pools[self.current_source].append(conn)
             else:
                 conn.close()
+        else:
+            conn.close()
     
-    def get_connection(self):
+    def _get_connection(self):
         """
-        Lấy kết nối đến database hiện tại - Giữ lại cho các phương thức cũ
+        Lấy kết nối đến database hiện tại
         
         Returns:
             SQLite connection
@@ -261,7 +340,7 @@ class MultipleDBManager:
         if not self.current_source or not comics_list:
             return []
         
-        conn = self._get_connection_from_pool()
+        conn = self._get_connection()
         cursor = conn.cursor()
         comic_ids = []
         
@@ -358,7 +437,7 @@ class MultipleDBManager:
             conn.rollback()
             return []
         finally:
-            self._return_connection_to_pool(conn)
+            conn.close()
             
     def save_comments_batch(self, comments_batch):
         """
@@ -370,7 +449,7 @@ class MultipleDBManager:
         if not self.current_source or not comments_batch:
             return
         
-        conn = self._get_connection_from_pool()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
@@ -415,7 +494,7 @@ class MultipleDBManager:
             logger.error(f"Lỗi khi lưu batch bình luận: {str(e)}")
             conn.rollback()
         finally:
-            self._return_connection_to_pool(conn)        
+            conn.close()        
     
     def save_comic(self, comic):
         """
@@ -430,13 +509,10 @@ class MultipleDBManager:
         if not self.current_source:
             raise ValueError("Chưa đặt nguồn dữ liệu hiện tại")
         
-        conn = self.get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
-            # NOTE: Cách này không an toàn với thread, chỉ dùng trong main thread
-            # Xem SQLiteHelper để triển khai thread-safe
-            
             # Điều chỉnh field names tùy thuộc vào nguồn
             if self.current_source == "TruyenQQ":
                 query = """
@@ -513,10 +589,6 @@ class MultipleDBManager:
             cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic.get("link_truyen", ""),))
             result = cursor.fetchone()
             
-            # Lấy ID của truyện vừa thêm/cập nhật
-            cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic.get("link_truyen", ""),))
-            result = cursor.fetchone()
-            
             return result["id"] if result else None
             
         except Exception as e:
@@ -536,7 +608,7 @@ class MultipleDBManager:
         if not self.current_source or not comments:
             return
         
-        conn = self.get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
@@ -582,7 +654,7 @@ class MultipleDBManager:
         if not self.current_source:
             return []
         
-        conn = self.get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
@@ -615,7 +687,7 @@ class MultipleDBManager:
         if not self.current_source:
             return None
         
-        conn = self.get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
@@ -643,7 +715,7 @@ class MultipleDBManager:
         if not self.current_source:
             return []
         
-        conn = self.get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
@@ -741,7 +813,7 @@ class MultipleDBManager:
         """
         try:
             # Lấy kết nối từ nguồn dữ liệu hiện tại
-            conn = self.sqlite_helper._get_connection_from_pool(self.current_source)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             # Cập nhật bảng comments để đặt các cột sentiment về NULL
@@ -754,14 +826,14 @@ class MultipleDBManager:
             # Commit thay đổi
             conn.commit()
             
-            # Trả lại kết nối vào pool
-            self.sqlite_helper._return_connection_to_pool(conn, self.current_source)
-            
+            logger.info(f"Đã xóa phân tích sentiment cho comic ID: {comic_id}")
             return True
             
         except Exception as e:
             logger.error(f"Lỗi khi xóa phân tích sentiment: {str(e)}")
             if 'conn' in locals():
                 conn.rollback()
-                self.sqlite_helper._return_connection_to_pool(conn, self.current_source)
             return False
+        finally:
+            if 'conn' in locals():
+                conn.close()
