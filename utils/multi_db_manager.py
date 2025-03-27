@@ -734,3 +734,34 @@ class MultipleDBManager:
         except Exception as e:
             logger.error(f"Lỗi khi xuất kết quả ra file Excel: {str(e)}")
             return False
+        
+    def delete_sentiment_analysis(self, comic_id):
+        """
+        Xóa phân tích sentiment của một truyện
+        """
+        try:
+            # Lấy kết nối từ nguồn dữ liệu hiện tại
+            conn = self.sqlite_helper._get_connection_from_pool(self.current_source)
+            cursor = conn.cursor()
+            
+            # Cập nhật bảng comments để đặt các cột sentiment về NULL
+            cursor.execute("""
+                UPDATE comments 
+                SET sentiment = NULL, sentiment_score = NULL 
+                WHERE comic_id = ?
+            """, (comic_id,))
+            
+            # Commit thay đổi
+            conn.commit()
+            
+            # Trả lại kết nối vào pool
+            self.sqlite_helper._return_connection_to_pool(conn, self.current_source)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi xóa phân tích sentiment: {str(e)}")
+            if 'conn' in locals():
+                conn.rollback()
+                self.sqlite_helper._return_connection_to_pool(conn, self.current_source)
+            return False

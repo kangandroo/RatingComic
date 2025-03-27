@@ -586,9 +586,19 @@ class WebsiteTab(QWidget):
         self.display_all_comics()
         
         # Tính toán rating theo batch
-        self.start_batch_processing()
+        QTimer.singleShot(500, self.delayed_start_rating)
         
         logger.info(f"Đã crawl xong {result.get('count', 0)} truyện từ {result.get('website', '')}")
+        
+    def delayed_start_rating(self):
+        """Khởi động tính toán rating sau khi UI đã cập nhật"""
+        logger.info("Bắt đầu tính toán rating sau delay...")
+        
+        # THÊM: Cho phép UI update trước khi bắt đầu tính toán
+        QApplication.processEvents()
+        
+        # Bắt đầu tính toán rating theo batch
+        self.start_batch_processing()        
     
     @pyqtSlot(str)
     def on_crawl_error(self, error):

@@ -74,11 +74,11 @@ class DetailAnalysisTab(QWidget):
         # Bảng kết quả
         # Bảng kết quả
         self.result_table = QTableWidget()
-        self.result_table.setColumnCount(12)
+        self.result_table.setColumnCount(11)
         self.result_table.setHorizontalHeaderLabels([
             "Xếp hạng", "Tên truyện", "Nguồn", "Mô tả", "Số chương", 
             "Lượt xem", "Lượt thích/theo dõi", "Rating", "Lượt đánh giá",
-            "Điểm cơ bản", "Điểm sentiment", "Điểm tổng hợp"
+            "Điểm sentiment", "Điểm tổng hợp"
         ])
 
         # Điều chỉnh header
@@ -89,12 +89,11 @@ class DetailAnalysisTab(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Mô tả
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Số chương
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Lượt xem
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Lượt thích/theo dõi
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Rating
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Lượt đánh giá
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Điểm cơ bản
-        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Điểm sentiment
-        header.setSectionResizeMode(11, QHeaderView.ResizeMode.ResizeToContents)  # Điểm tổng hợp
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  
 
         # Cho phép sắp xếp
         self.result_table.setSortingEnabled(True)
@@ -215,7 +214,7 @@ class DetailAnalysisTab(QWidget):
             "Tên truyện", "Nguồn", "Số comment", "Sentiment tích cực (%)", 
             "Sentiment tiêu cực (%)", "Sentiment trung tính (%)", 
             "Điểm sentiment", "Điểm tổng hợp", "Thời gian phân tích",
-            "Chi tiết", "Phân tích lại"
+            "Chi tiết", "Xóa"
         ])
 
         # Thiết lập header
@@ -227,7 +226,7 @@ class DetailAnalysisTab(QWidget):
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Thời gian
         header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Chi tiết
-        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # Phân tích lại
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  
 
         # Thêm các layout và widget theo đúng thứ tự
         history_layout.addLayout(filter_layout)
@@ -466,13 +465,13 @@ class DetailAnalysisTab(QWidget):
             detail_button.clicked.connect(lambda _, c=comic: self.show_sentiment_details(c))
             self.history_table.setCellWidget(row, 9, detail_button)
             
-            # Nút Phân tích lại
-            reanalyze_button = QPushButton("Phân tích lại")
-            reanalyze_button.clicked.connect(lambda _, c=comic: self.reanalyze_comic(c))
-            self.history_table.setCellWidget(row, 10, reanalyze_button)
+            # Nút Xóa (thay thế cho Phân tích lại)
+            delete_button = QPushButton("Xóa")
+            delete_button.setIcon(QIcon.fromTheme("edit-delete"))  # Thêm icon nếu có thể
+            delete_button.setStyleSheet("background-color: #ffcccc;")  # Màu đỏ nhạt cho nút xóa
+            delete_button.clicked.connect(lambda _, c=comic: self.delete_analysis(c))
+            self.history_table.setCellWidget(row, 10, delete_button)
         
-        # # Cập nhật biểu đồ tổng quan
-        # self.update_sentiment_chart(analyzed_comics)
 
     def filter_history_data(self):
         """Lọc dữ liệu lịch sử theo bộ lọc đã chọn"""
@@ -510,9 +509,20 @@ class DetailAnalysisTab(QWidget):
             row = comment_table.rowCount()
             comment_table.insertRow(row)
             
-            comment_table.setItem(row, 0, QTableWidgetItem(comment.get("ten_nguoi_binh_luan", "")))
-            comment_table.setItem(row, 1, QTableWidgetItem(comment.get("noi_dung", "")))
+            ten_nguoi_bl = comment.get("ten_nguoi_binh_luan", "")
+            ten_nguoi_bl_short = ten_nguoi_bl[:20] + "..." if len(ten_nguoi_bl) > 20 else ten_nguoi_bl
+            name_item = QTableWidgetItem(ten_nguoi_bl_short)
+            if len(ten_nguoi_bl) > 20:
+                name_item.setToolTip(ten_nguoi_bl)  # Hiển thị đầy đủ khi hover
+            comment_table.setItem(row, 0, name_item)
             
+            # Cải thiện xem nội dung comment
+            noi_dung = comment.get("noi_dung", "")
+            noi_dung_short = noi_dung[:100] + "..." if len(noi_dung) > 100 else noi_dung
+            content_item = QTableWidgetItem(noi_dung_short)
+            content_item.setToolTip(noi_dung)  # Hiển thị đầy đủ khi hover
+            comment_table.setItem(row, 1, content_item)
+                
             sentiment = comment.get("sentiment", "neutral")
             sentiment_item = QTableWidgetItem(sentiment)
             
@@ -534,35 +544,6 @@ class DetailAnalysisTab(QWidget):
         
         dialog.exec()
 
-    # def update_sentiment_chart(self, analyzed_comics):
-    #     """Cập nhật biểu đồ phân tích sentiment"""
-    #     # Trong phiên bản đầy đủ, bạn sẽ sử dụng matplotlib hoặc pyqtgraph
-    #     # Đây chỉ là placeholder
-    #     if not analyzed_comics:
-    #         self.sentiment_chart_label.setText("Không có dữ liệu để hiển thị biểu đồ")
-    #         return
-        
-    #     self.sentiment_chart_label.setText(
-    #         f"Tổng hợp từ {len(analyzed_comics)} truyện: "
-    #         f"Tích cực: {sum(c['positive_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%, "
-    #         f"Tiêu cực: {sum(c['negative_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%, "
-    #         f"Trung tính: {sum(c['neutral_percent'] for c in analyzed_comics)/len(analyzed_comics):.1f}%"
-    #     )
-
-    def reanalyze_comic(self, comic):
-        """Phân tích lại sentiment cho một truyện"""
-        reply = QMessageBox.question(
-            self, "Xác nhận", 
-            f"Bạn có muốn phân tích lại sentiment cho truyện '{comic.get('ten_truyen', '')}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            # Thêm truyện vào selected_comics và bắt đầu phân tích
-            self.selected_comics = [comic]
-            self.start_analysis()
-        
-    
     
     def set_selected_comics(self, selected_comics):
         """
@@ -622,19 +603,17 @@ class DetailAnalysisTab(QWidget):
         
         # Chuyển đổi index combo sang index cột thực tế
         if field_index == 0:  # Điểm tổng hợp
-            column = 11
-        elif field_index == 1:  # Điểm cơ bản
-            column = 9
-        elif field_index == 2:  # Điểm sentiment
             column = 10
+        elif field_index == 1:  # Điểm cơ bản
+            column = 8
+        elif field_index == 2:  # Điểm sentiment
+            column = 9
         elif field_index == 3:  # Lượt xem
             column = 5
-        elif field_index == 4:  # Lượt thích/theo dõi
-            column = 6
-        elif field_index == 5:  # Số chương
+        elif field_index == 4:  # Số chương
             column = 4
         else:
-            column = 11
+            column = 10
     
         # Xác định thứ tự sắp xếp
         order = Qt.SortOrder.DescendingOrder if self.sort_order_combo.currentIndex() == 0 else Qt.SortOrder.AscendingOrder
@@ -837,43 +816,37 @@ class DetailAnalysisTab(QWidget):
             
             # Tùy chỉnh theo nguồn
             if result.get("nguon") == "TruyenQQ":
-                like_follow = f"{result.get('luot_thich', 0)} / {result.get('luot_theo_doi', 0)}"
-                self.result_table.setItem(row, 6, QTableWidgetItem(like_follow))
+                self.result_table.setItem(row, 6, QTableWidgetItem("N/A"))
                 self.result_table.setItem(row, 7, QTableWidgetItem("N/A"))
-                self.result_table.setItem(row, 8, QTableWidgetItem("N/A"))
             elif result.get("nguon") == "NetTruyen":
-                like_follow = f"{result.get('luot_thich', 0)} / {result.get('luot_theo_doi', 0)}"
-                self.result_table.setItem(row, 6, QTableWidgetItem(like_follow))
-                self.result_table.setItem(row, 7, QTableWidgetItem(result.get("rating", "N/A")))
+                self.result_table.setItem(row, 6, QTableWidgetItem(result.get("rating", "N/A")))
                 
                 danh_gia_item = QTableWidgetItem()
                 danh_gia_item.setData(Qt.ItemDataRole.DisplayRole, int(result.get("luot_danh_gia", 0)))
-                self.result_table.setItem(row, 8, danh_gia_item)
+                self.result_table.setItem(row, 7, danh_gia_item)
             elif result.get("nguon") == "Manhuavn":
-                follow = f"N/A / {result.get('luot_theo_doi', 0)}"
-                self.result_table.setItem(row, 6, QTableWidgetItem(follow))
-                self.result_table.setItem(row, 7, QTableWidgetItem(result.get("danh_gia", "N/A")))
+                self.result_table.setItem(row, 6, QTableWidgetItem(result.get("danh_gia", "N/A")))
                 
                 danh_gia_item = QTableWidgetItem()
                 danh_gia_item.setData(Qt.ItemDataRole.DisplayRole, int(result.get("luot_danh_gia", 0)))
-                self.result_table.setItem(row, 8, danh_gia_item)
+                self.result_table.setItem(row, 7, danh_gia_item)
             
             # Thông tin điểm số
             base_rating_item = QTableWidgetItem()
             base_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(result.get("base_rating", 0)))
-            self.result_table.setItem(row, 9, base_rating_item)
+            self.result_table.setItem(row, 8, base_rating_item)
             
             sentiment_rating_item = QTableWidgetItem()
             sentiment_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(result.get("sentiment_rating", 0)))
-            self.result_table.setItem(row, 10, sentiment_rating_item)
+            self.result_table.setItem(row, 9, sentiment_rating_item)
             
             comprehensive_rating_item = QTableWidgetItem()
             comprehensive_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(result.get("comprehensive_rating", 0)))
-            self.result_table.setItem(row, 11, comprehensive_rating_item)
+            self.result_table.setItem(row, 10, comprehensive_rating_item)
             
             # Highlight top 3
             if i < 3:
-                for col in range(12):
+                for col in range(11):
                     item = self.result_table.item(row, col)
                     item.setBackground(Qt.GlobalColor.yellow)
         
@@ -881,8 +854,6 @@ class DetailAnalysisTab(QWidget):
         # Bật lại tính năng sắp xếp
         self.result_table.setSortingEnabled(True)
         
-        # [phần code hiển thị comment không thay đổi...]        
-        # Hiển thị chi tiết comment
         self.comment_table.setRowCount(0)
         for result in results:
             comments = result.get("comments", [])
@@ -890,10 +861,23 @@ class DetailAnalysisTab(QWidget):
                 row = self.comment_table.rowCount()
                 self.comment_table.insertRow(row)
                 
-                self.comment_table.setItem(row, 0, QTableWidgetItem(result["ten_truyen"]))
-                self.comment_table.setItem(row, 1, QTableWidgetItem(comment.get("ten_nguoi_binh_luan", "N/A")))
-                self.comment_table.setItem(row, 2, QTableWidgetItem(comment.get("noi_dung", "N/A")))
+                self.comment_table.setItem(row, 0, QTableWidgetItem(result.get("ten_truyen", "")))
                 
+                # Giới hạn tên người bình luận
+                ten_nguoi_bl = comment.get("ten_nguoi_binh_luan", "N/A")
+                ten_nguoi_bl_short = ten_nguoi_bl[:20] + "..." if len(ten_nguoi_bl) > 20 else ten_nguoi_bl
+                name_item = QTableWidgetItem(ten_nguoi_bl_short)
+                if len(ten_nguoi_bl) > 20:
+                    name_item.setToolTip(ten_nguoi_bl)
+                self.comment_table.setItem(row, 1, name_item)
+                
+                # Cải thiện xem nội dung
+                noi_dung = comment.get("noi_dung", "N/A")
+                noi_dung_short = noi_dung[:100] + "..." if len(noi_dung) > 100 else noi_dung
+                content_item = QTableWidgetItem(noi_dung_short)
+                content_item.setToolTip(noi_dung)
+                self.comment_table.setItem(row, 2, content_item)
+        
                 sentiment = comment.get("sentiment", "neutral")
                 sentiment_score = comment.get("sentiment_score", 0.5)
                 
@@ -926,6 +910,40 @@ class DetailAnalysisTab(QWidget):
         self.info_label.setText(f"Lỗi khi phân tích: {error}")
         
         logger.error(f"Lỗi khi phân tích: {error}")
+    
+    def delete_analysis(self, comic):
+        """Xóa phân tích sentiment cho một truyện"""
+        reply = QMessageBox.question(
+            self, "Xác nhận", 
+            f"Bạn có chắc chắn muốn xóa phân tích sentiment cho truyện '{comic.get('ten_truyen', '')}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Đặt nguồn dữ liệu
+                self.db_manager.set_source(comic.get("nguon", "TruyenQQ"))
+                
+                # Xóa dữ liệu phân tích sentiment từ database
+                # Chú ý: chỉ xóa thông tin sentiment, không xóa comment
+                self.db_manager.delete_sentiment_analysis(comic["id"])
+                
+                # Làm mới dữ liệu
+                self.load_history_data()
+                
+                QMessageBox.information(
+                    self, "Thành công", 
+                    f"Đã xóa phân tích sentiment cho truyện '{comic.get('ten_truyen', '')}'."
+                )
+                
+                logger.info(f"Đã xóa phân tích sentiment cho truyện: {comic.get('ten_truyen', '')}")
+                
+            except Exception as e:
+                logger.error(f"Lỗi khi xóa phân tích sentiment: {str(e)}")
+                QMessageBox.critical(
+                    self, "Lỗi", 
+                    f"Lỗi khi xóa phân tích sentiment: {str(e)}"
+                )
     
     def export_results(self):
         """Xuất kết quả phân tích ra file Excel"""
