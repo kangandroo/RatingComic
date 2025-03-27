@@ -262,19 +262,19 @@ class TruyenQQCrawler(BaseCrawler):
                         
                     except Exception as e:
                         logger.warning(f"Không thể lấy dữ liệu từ trang {page_num}: {str(e)}")
-                        break  # Gặp lỗi, dừng vòng lặp
+                        break  
                         
                 except Exception as e:
                     logger.error(f"Lỗi khi truy cập trang {page_num}: {str(e)}")
-                    break  # Gặp lỗi, dừng vòng lặp
+                    break  
                     
                 finally:
                     driver.quit()
                     # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn
                     time.sleep(random.uniform(1, 3))
             
-            # Xử lý chi tiết từng truyện
-            logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
+            # # Xử lý chi tiết từng truyện
+            # logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
             
             # Biến đếm cho số lượng truyện đã xử lý
             processed_count = 0
@@ -365,10 +365,11 @@ class TruyenQQCrawler(BaseCrawler):
                     )
                     break
                 except Exception as e:
-                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    logger.warning(f"Thử lần {attempt + 1}")
                     time.sleep(random.uniform(2, 4))
             else:
-                logger.error("Không thể truy cập trang sau 3 lần thử")
+                logger.error("Không thể truy cập trang sau 5 lần thử")
+                driver.quit()
                 return comic
             
             # Kiểm tra xem có phần tử tên khác không
@@ -422,17 +423,13 @@ class TruyenQQCrawler(BaseCrawler):
                 comic["luot_thich"] = self.extract_number(comic["luot_thich"])
                 comic["luot_theo_doi"] = self.extract_number(comic["luot_theo_doi"])
             except:
-                pass
-            
-            return comic
-            
+                pass  
         except Exception as e:
             logger.error(f"Lỗi khi crawl chi tiết truyện: {str(e)}")
             # Đảm bảo vẫn trả về đối tượng comic với thông tin cơ bản
-            return comic
-            
         finally:
             driver.quit()
+        return comic
     
     def crawl_comments(self, comic):
         """Crawl comment cho một truyện cụ thể"""
@@ -445,6 +442,8 @@ class TruyenQQCrawler(BaseCrawler):
             
             if not comic_url or not comic_id:
                 logger.error(f"Không tìm thấy link hoặc ID truyện: {comic.get('ten_truyen', 'Unknown')}")
+                if driver:
+                    driver.quit()
                 return []
                 
             logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')} (ID: {comic_id})")
@@ -453,17 +452,16 @@ class TruyenQQCrawler(BaseCrawler):
             driver = self.create_chrome_driver()
             
             # Thử truy cập URL
-            try:
-                driver.get(comic_url)
-            except Exception as e:
-                logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
-                return []
-                
+            driver.get(comic_url)
+            logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
+            
             time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
             
             # Kiểm tra xem trang có tồn tại không
             if "Page not found" in driver.title or "404" in driver.title:
                 logger.error(f"Trang không tồn tại: {comic_url}")
+                if driver:
+                    driver.quit()
                 return []
             
             # Lặp qua các trang comment
@@ -560,15 +558,14 @@ class TruyenQQCrawler(BaseCrawler):
                 logger.info(f"Lưu {len(all_comments)} comment cho truyện ID {comic_id}")
                 self.sqlite_helper.save_comments_to_db(comic_id, all_comments, "TruyenQQ")
             
-            return all_comments
-            
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {str(e)}")
-            return []
+            all_comments = []
             
         finally:
             if driver:
                 driver.quit()
+        return all_comments
     
     def extract_number(self, text_value):
         """

@@ -232,6 +232,8 @@ class NetTruyenCrawler(BaseCrawler):
                             with lock:
                                 progress = (processed_count / len(raw_comics)) * 100
                                 progress_callback.emit(int(progress))
+                                
+                        logger.info(f"Đã hoàn thành {processed_count}/{len(raw_comics)} truyện")
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
@@ -354,11 +356,12 @@ class NetTruyenCrawler(BaseCrawler):
                     )
                     break
                 except Exception as e:
-                    logger.warning(f"Thử lần {attempt + 1}: Lỗi {e}")
+                    logger.warning(f"Thử lần {attempt + 1}")
                     time.sleep(random.uniform(2, 4))
             else:
-                logger.error("Không thể truy cập trang sau 3 lần thử")
-                return comic
+                logger.error("Không thể truy cập trang sau 5 lần thử")
+                driver.quit()
+                return None
 
             # Lấy thông tin cơ bản
             story["Tác giả"] = self.get_text_safe(driver, "li.author.row p.col-xs-8")
@@ -402,7 +405,7 @@ class NetTruyenCrawler(BaseCrawler):
 
         except Exception as e:
             logger.error(f"Lỗi khi lấy thông tin chi tiết truyện {story.get('Tên truyện')}: {e}")
-            return None
+            story = None
         finally:
             driver.quit()
             
@@ -440,6 +443,7 @@ class NetTruyenCrawler(BaseCrawler):
             link = comic.get("link_truyen")
             if not link:
                 logger.error(f"Không tìm thấy link truyện cho: {comic.get('ten_truyen')}")
+                driver.quit()
                 return []
             
             logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
