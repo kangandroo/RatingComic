@@ -451,10 +451,12 @@ class TruyenQQCrawler(BaseCrawler):
             # Khởi tạo WebDriver
             driver = self.create_chrome_driver()
             
-            # Thử truy cập URL
-            driver.get(comic_url)
-            logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
-            
+            try:
+                driver.get(comic_url)
+            except Exception as e:
+                logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
+                return []
+                        
             time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
             
             # Kiểm tra xem trang có tồn tại không
@@ -563,7 +565,7 @@ class TruyenQQCrawler(BaseCrawler):
             all_comments = []
             
         finally:
-            if driver:
+            if driver is not None:
                 driver.quit()
         return all_comments
     

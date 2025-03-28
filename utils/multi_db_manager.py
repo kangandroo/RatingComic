@@ -234,7 +234,7 @@ class MultipleDBManager:
                 )
             
             conn.commit()
-            logger.info(f"Đã cập nhật rating cho {len(comics)} truyện")
+            # logger.info(f"Đã cập nhật rating cho {len(comics)} truyện")
             return True
             
         except Exception as e:

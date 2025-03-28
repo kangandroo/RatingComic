@@ -382,7 +382,7 @@ class WebsiteTab(QWidget):
             return
             
         # Kiểm tra nếu thread đang chạy
-        if hasattr(self, 'rating_thread') and self.rating_thread.isRunning():
+        if hasattr(self, 'rating_thread') and self.rating_thread is not None and self.rating_thread.isRunning():
             logger.debug("Thread tính toán đang chạy, chờ hoàn thành...")
             # Lập lịch kiểm tra lại sau 200ms
             QTimer.singleShot(200, self.process_next_batch)
@@ -529,6 +529,7 @@ class WebsiteTab(QWidget):
                 self.rating_thread = None
             except Exception as e:
                 logger.error(f"Lỗi khi đóng rating thread: {e}")
+                self.rating_thread = None
     
     def on_batch_complete(self, results, start_idx):
         """
@@ -818,6 +819,9 @@ class WebsiteTab(QWidget):
         # Thu thập truyện đã chọn
         self.checked_comics = []
         
+        current_website = self.website_combo.currentText()
+        self.db_manager.set_source(current_website)
+        
         for row in range(self.results_table.rowCount()):
             checkbox_item = self.results_table.item(row, 0)
             if checkbox_item.checkState() == Qt.CheckState.Checked:
@@ -828,8 +832,11 @@ class WebsiteTab(QWidget):
                     # Lấy thông tin đầy đủ của truyện từ database
                     comic = self.db_manager.get_comic_by_id(comic_id)
                     
-                    if comic:
+                    if comic and comic.get("nguon") == current_website:
                         self.checked_comics.append(comic)
+                    elif comic:
+                        logger.warning(f"Truyện ID {comic_id} có nguồn {comic.get('nguon')} khác với nguồn hiện tại {current_website}")
+
         
         # Gửi signal với danh sách truyện đã chọn
         self.selection_updated.emit(self.checked_comics)
