@@ -264,6 +264,19 @@ class WebsiteTab(QWidget):
         # Thiết lập số dòng cho bảng
         self.results_table.setRowCount(len(self.all_comics))
         
+        current_website = self.website_combo.currentText()
+        source_comics = []
+        
+        for comic in self.all_comics:
+            if comic.get("nguon") == current_website:
+                source_comics.append(comic)
+        
+        if len(source_comics) != len(self.all_comics):
+            logger.warning(f"Phát hiện {len(self.all_comics) - len(source_comics)} truyện không thuộc nguồn {current_website}")
+            # Cập nhật lại danh sách truyện nếu cần
+            self.all_comics = source_comics
+            self.results_table.setRowCount(len(source_comics))
+        
         # Thêm dữ liệu mới
         ratings_to_calculate = []
         

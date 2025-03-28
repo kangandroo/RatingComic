@@ -77,7 +77,7 @@ class DetailAnalysisTab(QWidget):
         self.result_table.setColumnCount(11)
         self.result_table.setHorizontalHeaderLabels([
             "Xếp hạng", "Tên truyện", "Nguồn", "Mô tả", "Số chương", 
-            "Lượt xem", "Lượt thích/theo dõi", "Rating", "Lượt đánh giá",
+            "Lượt xem", "Rating", "Lượt đánh giá", "Điểm cơ bản",
             "Điểm sentiment", "Điểm tổng hợp"
         ])
 
@@ -107,7 +107,7 @@ class DetailAnalysisTab(QWidget):
         self.sort_field_combo = QComboBox()
         self.sort_field_combo.addItems([
             "Điểm tổng hợp", "Điểm cơ bản", "Điểm sentiment", 
-            "Lượt xem", "Lượt thích/theo dõi", "Số chương"
+            "Lượt xem", "Số chương"
         ])
 
         self.sort_order_combo = QComboBox()
