@@ -4,6 +4,7 @@ import logging
 import threading
 import queue
 from typing import List, Dict, Any, Optional
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -295,31 +296,50 @@ class SQLiteHelper:
             
             return self.thread_local.connections[connection_key]
     
-    # Phương thức mới cho batch processing
-    def save_comics_batch(self, comics_list, source_name):
+    def save_comics_batch(self, comics_list, source_name, timeout=30):
         """
-        Lưu nhiều truyện cùng lúc trong một transaction
+        Lưu nhiều truyện cùng lúc trong một transaction với timeout
         
         Args:
             comics_list: Danh sách dữ liệu truyện
             source_name: Tên nguồn
+            timeout: Thời gian tối đa (giây) để thực hiện thao tác, mặc định 60 giây
             
         Returns:
             list: Danh sách ID của các truyện đã lưu
         """
         if not comics_list:
             return []
-            
-        conn = self._get_connection_from_pool(source_name)
-        cursor = conn.cursor()
-        comic_ids = []
+        
+        start_time = time.time()  # Ghi lại thời điểm bắt đầu
+        conn = None
         
         try:
+            # Kiểm tra timeout trước khi lấy kết nối
+            if time.time() - start_time > timeout:
+                logger.warning(f"Timeout khi lưu batch ({timeout}s)")
+                return []
+                
+            conn = self._get_connection_from_pool(source_name)
+            cursor = conn.cursor()
+            comic_ids = []
+            
             # Bắt đầu transaction
             conn.execute("BEGIN TRANSACTION")
             
+            # Giới hạn số lượng mỗi batch nếu danh sách quá lớn
+            batch_size = min(len(comics_list), 1000)  # Giới hạn kích thước batch
+            processed_comics = 0
+            
             for comic_data in comics_list:
-                # Điều chỉnh field names tùy thuộc vào nguồn
+                # Kiểm tra timeout định kỳ 
+                processed_comics += 1
+                if processed_comics % 50 == 0 and time.time() - start_time > timeout:
+                    logger.warning(f"Timeout sau khi lưu {processed_comics}/{len(comics_list)} truyện ({timeout}s)")
+                    conn.rollback()
+                    return comic_ids[:processed_comics-50]  # Trả về ID các truyện đã được xử lý trước batch hiện tại
+                
+                # Điều chỉnh query tùy theo nguồn dữ liệu (giữ nguyên code hiện tại)
                 if source_name == "TruyenQQ":
                     query = """
                         INSERT OR REPLACE INTO comics 
@@ -392,24 +412,43 @@ class SQLiteHelper:
                 
                 cursor.execute(query, params)
                 
-                # Lấy ID của truyện vừa thêm/cập nhật
+                # Lấy ID của truyện vừa thêm
                 cursor.execute("SELECT id FROM comics WHERE link_truyen = ?", (comic_data.get("link_truyen", ""),))
                 result = cursor.fetchone()
                 if result:
                     comic_ids.append(result["id"])
             
+            # Kiểm tra timeout trước khi commit
+            if time.time() - start_time > timeout:
+                logger.warning(f"Timeout trước khi commit ({timeout}s)")
+                conn.rollback()
+                return comic_ids  # Có thể một số ID đã được lấy nhưng chưa commit
+            
             # Commit tất cả cùng lúc
             conn.commit()
-            logger.info(f"Đã lưu batch {len(comics_list)} truyện vào {source_name}")
+            # logger.info(f"Đã lưu batch {len(comics_list)} truyện vào {source_name} trong {time.time() - start_time:.2f}s")
             
             return comic_ids
             
         except Exception as e:
             logger.error(f"Lỗi khi lưu batch truyện vào database: {e}")
-            conn.rollback()
-            return []
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception as rollback_error:
+                    logger.error(f"Lỗi khi rollback: {rollback_error}")
+            return comic_ids  # Trả về danh sách ID đã thu thập được (nếu có)
         finally:
-            self._return_connection_to_pool(conn, source_name)
+            # Kiểm tra xem conn có tồn tại không và trả lại pool
+            if conn:
+                try:
+                    self._return_connection_to_pool(conn, source_name)
+                except Exception as pool_error:
+                    logger.error(f"Lỗi khi trả kết nối về pool: {pool_error}")
+                    try:
+                        conn.close()  # Cố gắng đóng kết nối nếu không thể trả về pool
+                    except:
+                        pass
     
     def save_comments_batch(self, comments_batch, source_name):
         """
@@ -478,12 +517,6 @@ class SQLiteHelper:
         """
         Lưu truyện vào database an toàn với thread
         
-        Args:
-            comic_data: Dữ liệu truyện
-            source_name: Tên nguồn
-            
-        Returns:
-            int: ID của truyện hoặc None nếu lỗi
         """
         # Gọi save_comics_batch với một truyện
         result = self.save_comics_batch([comic_data], source_name)

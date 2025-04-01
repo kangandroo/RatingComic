@@ -14,10 +14,66 @@ import queue
 import threading
 from utils.sqlite_helper import SQLiteHelper
 
-
 from crawlers.base_crawler import BaseCrawler
 
 logger = logging.getLogger(__name__)
+
+class DriverPool:
+    """Quản lý pool của WebDriver để tái sử dụng giữa các threads"""
+    
+    def __init__(self, max_drivers=10, setup_func=None):
+        self.drivers = queue.Queue()
+        self.max_drivers = max_drivers
+        self.setup_func = setup_func
+        self.active_drivers = 0
+        self.lock = threading.Lock()
+        self.all_drivers = []  # Để theo dõi tất cả driver đã tạo
+    
+    def get_driver(self):
+        """Lấy driver từ pool hoặc tạo mới nếu cần"""
+        try:
+            # Thử lấy driver có sẵn từ pool
+            return self.drivers.get_nowait()
+        except queue.Empty:
+            # Nếu pool rỗng và chưa đạt giới hạn, tạo driver mới
+            with self.lock:
+                if self.active_drivers < self.max_drivers:
+                    driver = self.setup_func()
+                    self.active_drivers += 1
+                    self.all_drivers.append(driver)
+                    return driver
+                else:
+                    # Đã đạt giới hạn, đợi 1 driver được trả về
+                    logger.info("Đã đạt giới hạn driver, đợi driver được trả về")
+                    return self.drivers.get()
+    
+    def return_driver(self, driver):
+        """Trả driver về pool để tái sử dụng"""
+        if driver:
+            # Xóa sạch cookies trước khi tái sử dụng
+            try:
+                driver.delete_all_cookies()
+            except:
+                pass
+            self.drivers.put(driver)
+    
+    def close_all(self):
+        """Đóng tất cả driver khi hoàn thành"""
+        logger.info(f"Đóng tất cả {len(self.all_drivers)} driver...")
+        for driver in self.all_drivers:
+            try:
+                driver.quit()
+            except:
+                pass
+        self.all_drivers.clear()
+        self.active_drivers = 0
+        
+        # Xóa queue
+        while not self.drivers.empty():
+            try:
+                self.drivers.get_nowait()
+            except:
+                break
 
 class NetTruyenCrawler(BaseCrawler):
     """Crawler cho website NetTruyen"""
@@ -27,8 +83,7 @@ class NetTruyenCrawler(BaseCrawler):
         self.base_url = base_url
         self.max_pages = max_pages
         self.worker_count = worker_count
-        # self.db_manager.set_source("NetTruyen")  # Đặt nguồn dữ liệu mặc định
-    
+        
         # Khởi tạo SQLiteHelper
         self.sqlite_helper = SQLiteHelper(self.db_manager.db_folder)
         
@@ -36,6 +91,9 @@ class NetTruyenCrawler(BaseCrawler):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
         }
+        
+        # Tạo một thread local storage để lưu kết nối SQLite cho mỗi thread
+        self.thread_local = threading.local()
 
     def setup_driver(self):
         """Tạo và cấu hình Chrome WebDriver với các tùy chọn vô hiệu hóa TensorFlow và GPU"""
@@ -193,7 +251,7 @@ class NetTruyenCrawler(BaseCrawler):
             return 0
     
     def crawl_basic_data(self, progress_callback=None):
-        """Crawl dữ liệu cơ bản từ NetTruyen với SQLiteHelper"""
+        """Crawl dữ liệu cơ bản từ NetTruyen với driver pool và xử lý theo batch"""
         start_time = time.time()
         comics_count = 0
         
@@ -201,60 +259,126 @@ class NetTruyenCrawler(BaseCrawler):
             # Đặt nguồn dữ liệu
             self.db_manager.set_source("NetTruyen")
             
-            # Khởi tạo SQLiteHelper
-            sqlite_helper = SQLiteHelper(self.db_manager.db_folder)
+            # Khởi tạo driver pool
+            driver_pool = DriverPool(max_drivers=self.worker_count, setup_func=self.setup_driver)
             
-            # Lấy danh sách truyện
-            raw_comics = self.get_all_stories(self.max_pages, progress_callback)
-            logger.info(f"Đã lấy được {len(raw_comics)} truyện từ danh sách")
+            # Lấy danh sách truyện (sử dụng driver riêng)
+            driver = self.setup_driver()
+            try:
+                raw_comics = self.get_all_stories(driver, self.max_pages, progress_callback)
+                logger.info(f"Đã lấy được {len(raw_comics)} truyện từ danh sách")
+            finally:
+                driver.quit()
             
-            # Tạo counter để theo dõi số lượng đã lưu
+            # Biến theo dõi số lượng comics đã xử lý
             processed_count = 0
             
-            # Function để xử lý một truyện
-            def process_comic(comic):
+            # Cấu trúc dữ liệu để theo dõi tiến độ
+            data_lock = threading.Lock()
+            batch_size = min(100, len(raw_comics)) 
+            
+            # Hàm xử lý một comic
+            def process_comic(comic, driver_pool, batch_stopping):
                 nonlocal processed_count
+                
+                if batch_stopping.is_set():
+                    return None
+                
+                # Lấy driver từ pool
+                driver = driver_pool.get_driver()
                 
                 try:
                     # Lấy thông tin chi tiết
-                    detailed_comic = self.get_story_details(comic)
+                    detailed_comic = self.get_story_details(comic, driver)
                     
                     if detailed_comic:
                         # Chuyển đổi định dạng
                         db_comic = self.transform_comic_data(detailed_comic)
                         
-                        # Lưu vào database bằng helper
-                        sqlite_helper.save_comic_to_db(db_comic, "NetTruyen")
-                        processed_count += 1
+                        # Lưu vào database
+                        self.sqlite_helper.save_comic_to_db(db_comic, "NetTruyen")
                         
-                        # Cập nhật tiến độ
-                        if progress_callback and len(raw_comics) > 0:
-                            with lock:
+                        # Cập nhật counter an toàn
+                        with data_lock:
+                            processed_count += 1
+                            
+                            # Cập nhật tiến độ
+                            if progress_callback and len(raw_comics) > 0:
                                 progress = (processed_count / len(raw_comics)) * 100
                                 progress_callback.emit(int(progress))
                                 
-                        logger.info(f"Đã hoàn thành {processed_count}/{len(raw_comics)} truyện")
+                    return detailed_comic
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
+                    return None
+                finally:
+                    # Trả driver lại pool
+                    driver_pool.return_driver(driver)
             
-            # Dùng lock để đồng bộ cập nhật progress_callback
-            lock = threading.Lock()
-            
-            # Xử lý song song việc crawl + lưu dữ liệu
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                # Submit tất cả task
-                futures = [executor.submit(process_comic, comic) for comic in raw_comics]
+            # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
+            for i in range(0, len(raw_comics), batch_size):
+                # Mỗi batch có một flag batch_stopping riêng
+                batch_stopping = threading.Event()
                 
-                # Đợi tất cả hoàn thành
-                concurrent.futures.wait(futures)
-            
-            # Lấy số lượng đã xử lý
-            comics_count = processed_count
+                batch = raw_comics[i:i+batch_size]
+                logger.info(f"Xử lý batch {i//batch_size + 1}/{(len(raw_comics)-1)//batch_size + 1} ({len(batch)} truyện)")
+                
+                batch_comics_count = 0
+                
+                # Tạo executor mới cho mỗi batch
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+                    futures = {executor.submit(process_comic, comic, driver_pool, batch_stopping): comic for comic in batch}
+                    
+                    try:
+                        # Đợi các future hoàn thành với timeout
+                        for future in concurrent.futures.as_completed(futures, timeout=180):
+                            comic = futures[future]
+                            try:
+                                result = future.result()
+                                if result:
+                                    comics_count += 1
+                                    batch_comics_count += 1
+                                    logger.info(f"Hoàn thành {comics_count}/{len(raw_comics)}: {comic.get('Tên truyện', '')}")
+                            except Exception as e:
+                                logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
+                    except concurrent.futures.TimeoutError:
+                        # Đếm số lượng tasks hoàn thành và chưa hoàn thành
+                        completed = sum(1 for f in futures if f.done())
+                        pending = sum(1 for f in futures if not f.done())
+                        
+                        logger.warning(f"Timeout khi xử lý batch. Đã xử lý {completed}/{len(futures)} tasks trong batch hiện tại. Còn {pending} tasks đang chờ.")
+                        logger.warning(f"Tổng số truyện đã xử lý: {comics_count}")
+                        
+                        batch_stopping.set()  # Chỉ dừng batch hiện tại
+                        
+                        # Hủy các future đang chạy
+                        for future in futures:
+                            if not future.done():
+                                future.cancel()
+                        
+                        logger.warning(f"Đã hủy batch {i//batch_size + 1} do timeout. Chuyển sang batch tiếp theo.")
+                    
+                    logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
+                
+                # Gọi garbage collector
+                import gc
+                gc.collect()
+                
+                # Pause nhỏ giữa các batch để giải phóng tài nguyên
+                logger.info("Nghỉ giữa các batch để giải phóng tài nguyên...")
+                time.sleep(3)
                 
         except Exception as e:
             logger.error(f"Lỗi trong quá trình crawl: {e}")
         finally:
+            # Đóng tất cả driver
+            if 'driver_pool' in locals():
+                driver_pool.close_all()
+            
+            # Đóng tất cả kết nối SQLite
+            self.sqlite_helper.close_all_connections()
+            
             elapsed_time = time.time() - start_time
             logger.info(f"Đã crawl {comics_count} truyện trong {elapsed_time:.2f} giây")
         
@@ -264,9 +388,8 @@ class NetTruyenCrawler(BaseCrawler):
             "website": "NetTruyen"
         }
     
-    def get_all_stories(self, max_pages=None, progress_callback=None):
+    def get_all_stories(self, driver, max_pages=None, progress_callback=None):
         """Lấy danh sách truyện từ nhiều trang"""
-        driver = self.setup_driver()
         stories = []
         page = 1
         
@@ -321,12 +444,6 @@ class NetTruyenCrawler(BaseCrawler):
                         logger.error(f"Lỗi khi xử lý truyện: {e}")
                         continue
 
-                # # Kiểm tra có trang tiếp theo không
-                # next_buttons = driver.find_elements(By.CSS_SELECTOR, ".pagination a.next")
-                # if not next_buttons:
-                #     logger.info("Không tìm thấy nút next, kết thúc crawl")
-                #     break
-
                 # Cập nhật tiến độ
                 if progress_callback and max_pages:
                     progress = min(25, (page / max_pages) * 25)  # Chỉ chiếm 25% đầu tiên
@@ -337,16 +454,12 @@ class NetTruyenCrawler(BaseCrawler):
                 
         except Exception as e:
             logger.error(f"Lỗi khi lấy danh sách truyện: {e}")
-        finally:
-            driver.quit()
             
         logger.info(f"Đã tìm thấy {len(stories)} truyện để crawl")
         return stories
     
-    def get_story_details(self, story):
-        """Lấy thông tin chi tiết của truyện"""
-        driver = self.setup_driver()
-        
+    def get_story_details(self, story, driver):
+        """Lấy thông tin chi tiết của truyện sử dụng driver được cung cấp từ pool"""
         try:
             for attempt in range(5):
                 try:
@@ -360,7 +473,6 @@ class NetTruyenCrawler(BaseCrawler):
                     time.sleep(random.uniform(2, 4))
             else:
                 logger.error("Không thể truy cập trang sau 5 lần thử")
-                driver.quit()
                 return None
 
             # Lấy thông tin cơ bản
@@ -405,9 +517,7 @@ class NetTruyenCrawler(BaseCrawler):
 
         except Exception as e:
             logger.error(f"Lỗi khi lấy thông tin chi tiết truyện {story.get('Tên truyện')}: {e}")
-            story = None
-        finally:
-            driver.quit()
+            return None
             
         return story
     
@@ -416,8 +526,6 @@ class NetTruyenCrawler(BaseCrawler):
         return {
             "ten_truyen": raw_comic.get("Tên truyện", ""),
             "tac_gia": raw_comic.get("Tác giả", "N/A"),
-            # "the_loai": raw_comic.get("Thể loại", ""),
-            # "mo_ta": raw_comic.get("Mô tả", ""),
             "link_truyen": raw_comic.get("Link truyện", ""),
             "so_chuong": raw_comic.get("Số chương", 0),
             "luot_xem": raw_comic.get("Lượt xem", 0),
@@ -427,13 +535,11 @@ class NetTruyenCrawler(BaseCrawler):
             "so_binh_luan": raw_comic.get("Số bình luận", 0),
             "trang_thai": raw_comic.get("Trạng thái", ""),
             "nguon": "NetTruyen",
-            # Ước tính lượt thích (NetTruyen không có mục này)
-            # "luot_thich": int(raw_comic.get("Lượt theo dõi", 0) * 0.7)
         }
     
     def crawl_comments(self, comic):
-        """Crawl comment cho một truyện cụ thể - trong thread phân tích"""
-        driver = self.setup_driver()
+        """Crawl comment cho một truyện cụ thể - với cải tiến driver pool"""
+        driver_pool = DriverPool(max_drivers=1, setup_func=self.setup_driver)
         comments = []
         unique_contents = set()
         duplicate_found = False
@@ -441,122 +547,218 @@ class NetTruyenCrawler(BaseCrawler):
         try:
             # Lấy link từ comic
             link = comic.get("link_truyen")
-            if not link:
-                logger.error(f"Không tìm thấy link truyện cho: {comic.get('ten_truyen')}")
-                driver.quit()
+            comic_id = comic.get("id")
+            
+            if not link or not comic_id:
+                logger.error(f"Không tìm thấy link hoặc ID truyện cho: {comic.get('ten_truyen', 'Unknown')}")
                 return []
             
             logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
             
-            driver.get(link)
-            time.sleep(random.uniform(2, 3))
-
-            # Gọi hàm joinComment() để chuyển đến phần comment
-            try:
-                driver.execute_script("joinComment()")
-                time.sleep(random.uniform(2, 3))
-            except Exception:
-                logger.warning("Không thể gọi hàm joinComment")
-                
-            page_comment = 1
-            max_comment_pages = 1000  # Giới hạn số trang bình luận
+            # Lấy driver từ pool
+            driver = driver_pool.get_driver()
             
-            while page_comment <= max_comment_pages:
-                comments_in_current_page = 0
+            try:
+                # Thử truy cập trang với retry
+                for attempt in range(3):
+                    try:
+                        driver.get(link)
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, ".title-detail"))
+                        )
+                        break
+                    except Exception as e:
+                        if attempt == 2:  # nếu lần cuối vẫn lỗi
+                            logger.error(f"Không thể truy cập trang sau 3 lần thử: {e}")
+                            return []
+                        time.sleep(random.uniform(2, 3))
 
-                # Lấy danh sách bình luận với selector cụ thể
+                # Gọi hàm joinComment() để chuyển đến phần comment
                 try:
-                    comment_elements = WebDriverWait(driver, 5).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".info"))
-                    )
-                    
-                    if not comment_elements:
-                        logger.info("Không tìm thấy comment trong trang")
-                        break
-                        
-                    for comment in comment_elements:
-                        # Lấy tên người bình luận
-                        try:
-                            name_elem = comment.find_element(By.CSS_SELECTOR, ".comment-header span.authorname.name-1")
-                            name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
-                        except:
-                            name = "Người dùng ẩn danh"
-                        
-                        # Lấy nội dung bình luận
-                        try:
-                            content_elem = comment.find_element(By.CSS_SELECTOR, ".info div.comment-content")
-                            content = content_elem.text.strip() if content_elem.text else "N/A"
-                        except:
-                            content = "N/A"
-                        
-                        # Kiểm tra xem nội dung bình luận đã tồn tại chưa
-                        if content != "N/A" and content in unique_contents:
-                            duplicate_found = True
-                            logger.info("Phát hiện comment trùng lặp, sẽ dừng crawl")
-                            break
-                        
-                        # Nếu nội dung khác N/A, thêm vào tập hợp để kiểm tra trùng lặp sau này
-                        if content != "N/A":
-                            unique_contents.add(content)
-                        
-                        # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
-                        comments.append({
-                            "ten_nguoi_binh_luan": name,
-                            "noi_dung": content,
-                            "comic_id": comic.get("id")
-                        })
-                        comments_in_current_page += 1
-                    
-                    # Nếu phát hiện bình luận trùng lặp, dừng việc chuyển trang
-                    if duplicate_found:
-                        break
-                    
-                    # Thêm điều kiện dừng: Nếu số lượng bình luận trong trang < 10
-                    if comments_in_current_page < 10:
-                        logger.info(f"Số lượng comment trang {page_comment} < 10, dừng crawl")
-                        break
-                        
+                    driver.execute_script("joinComment()")
+                    time.sleep(random.uniform(2, 3))
                 except Exception as e:
-                    logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
-                    break
-
-                # Nếu phát hiện bình luận trùng lặp, không tiếp tục chuyển trang
-                if duplicate_found:
-                    break
-
-                # Tìm nút chuyển trang bình luận
-                try:
-                    # Thử nhiều cách để tìm nút "Sau" hoặc "Next"
-                    next_button_selectors = [
-                        "/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[6]/a",
-                        "//a[contains(text(), 'Sau')]",
-                        "//a[contains(text(), 'Next')]",
-                        "//li[contains(@class, 'next')]/a"
-                    ]
+                    logger.warning(f"Không thể gọi hàm joinComment: {e}")
                     
-                    next_button = None
-                    for selector in next_button_selectors:
-                        next_buttons = driver.find_elements(By.XPATH, selector)
-                        if next_buttons:
-                            next_button = next_buttons[0]
+                page_comment = 1
+                max_comment_pages = 20  # Giảm giới hạn từ 1000 xuống 20 để tránh treo
+                
+                # Xóa cache và cookie để cải thiện hiệu suất
+                try:
+                    driver.execute_script("window.localStorage.clear();")
+                    driver.execute_script("window.sessionStorage.clear();")
+                except:
+                    pass
+                
+                while page_comment <= max_comment_pages and not duplicate_found:
+                    comments_in_current_page = 0
+
+                    # Lấy danh sách bình luận - sử dụng selector đặc thù của NetTruyen
+                    try:
+                        # Thử nhiều selector khác nhau cho NetTruyen
+                        selectors = [
+                            ".info"
+                        ]
+                        
+                        comment_elements = []
+                        for selector in selectors:
+                            try:
+                                elements = WebDriverWait(driver, 3).until(
+                                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
+                                )
+                                if elements:
+                                    comment_elements = elements
+                                    logger.info(f"Tìm thấy {len(elements)} comments với selector '{selector}'")
+                                    break
+                            except:
+                                continue
+                        
+                        if not comment_elements:
+                            logger.info("Không tìm thấy comment trong trang")
                             break
                             
-                    if next_button:
-                        driver.execute_script("arguments[0].click();", next_button)
-                        page_comment += 1
-                        logger.info(f"Chuyển sang trang comment {page_comment}")
-                        time.sleep(random.uniform(2, 3))
-                    else:
-                        logger.info("Không tìm thấy nút chuyển trang, kết thúc")
+                        for comment in comment_elements:
+                            # Lấy tên người bình luận - điều chỉnh selector cho NetTruyen
+                            name = "Người dùng ẩn danh"
+                            try:
+                                # Thử nhiều selector
+                                name_selectors = [
+                                    ".comment-header span.authorname.name-1", 
+                                    ".head-comment strong.name-1",
+                                    ".outsite-comment div.outline-content-comment div:nth-child(1) strong",
+                                    "strong.name-1"
+                                ]
+                                
+                                for selector in name_selectors:
+                                    try:
+                                        name_elem = comment.find_element(By.CSS_SELECTOR, selector)
+                                        if name_elem:
+                                            name = name_elem.text.strip()
+                                            if name:
+                                                break
+                                    except:
+                                        continue
+                                        
+                                # Nếu không tìm thấy qua CSS, thử JavaScript
+                                if name == "Người dùng ẩn danh":
+                                    name = driver.execute_script("""
+                                        return arguments[0].querySelector('div strong')?.innerText || 
+                                            arguments[0].querySelector('strong')?.innerText || 
+                                            "Người dùng ẩn danh";
+                                    """, comment)
+                            except:
+                                pass
+                            
+                            # Lấy nội dung bình luận - điều chỉnh selector cho NetTruyen
+                            content = "N/A"
+                            try:
+                                # Thử nhiều selector
+                                content_selectors = [
+                                    ".info div.comment-content", 
+                                    ".content-comment",
+                                    ".outsite-comment div.outline-content-comment div.content-comment"
+                                ]
+                                
+                                for selector in content_selectors:
+                                    try:
+                                        content_elem = comment.find_element(By.CSS_SELECTOR, selector)
+                                        if content_elem:
+                                            content = content_elem.text.strip()
+                                            if content:
+                                                break
+                                    except:
+                                        continue
+                                        
+                                # Nếu không tìm thấy qua CSS, thử JavaScript
+                                if content == "N/A":
+                                    content = driver.execute_script("""
+                                        return arguments[0].querySelector('div.content-comment')?.innerText || 
+                                            arguments[0].querySelector('div[class*="content"]')?.innerText || 
+                                            "N/A";
+                                    """, comment)
+                            except:
+                                pass
+                            
+                            # Kiểm tra xem nội dung bình luận đã tồn tại chưa
+                            if content != "N/A" and content in unique_contents:
+                                duplicate_found = True
+                                logger.info("Phát hiện comment trùng lặp, sẽ dừng crawl")
+                                break
+                            
+                            # Nếu nội dung khác N/A, thêm vào tập hợp để kiểm tra trùng lặp sau này
+                            if content != "N/A":
+                                unique_contents.add(content)
+                            
+                            # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
+                            comments.append({
+                                "ten_nguoi_binh_luan": name,
+                                "noi_dung": content,
+                                "comic_id": comic_id
+                            })
+                            comments_in_current_page += 1
+                        
+                        # Nếu phát hiện bình luận trùng lặp, dừng việc chuyển trang
+                        if duplicate_found:
+                            break
+                        
+                        # Thêm điều kiện dừng: Nếu số lượng bình luận trong trang < 10
+                        if comments_in_current_page < 10:
+                            logger.info(f"Số lượng comment trang {page_comment} < 10, dừng crawl")
+                            break
+                            
+                    except Exception as e:
+                        logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
                         break
-                except Exception as e:
-                    logger.error(f"Lỗi khi chuyển trang comment: {e}")
-                    break
+
+                    # Tìm nút chuyển trang bình luận
+                    if not duplicate_found:
+                        try:
+                            # Thử nhiều cách để tìm nút "Sau" hoặc "Next"
+                            next_button_selectors = [
+                                "/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[6]/a"
+                            ]
+                            
+                            next_button = None
+                            for selector in next_button_selectors:
+                                next_buttons = driver.find_elements(By.XPATH, selector)
+                                if next_buttons and len(next_buttons) > 0:
+                                    next_button = next_buttons[0]
+                                    break
+                                    
+                            if next_button and next_button.is_displayed():
+                                # Scroll đến nút để đảm bảo có thể click
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
+                                time.sleep(0.5)
+                                
+                                # Thử click bằng JavaScript để tránh lỗi "element not clickable"
+                                driver.execute_script("arguments[0].click();", next_button)
+                                page_comment += 1
+                                logger.info(f"Chuyển sang trang comment {page_comment}")
+                                time.sleep(random.uniform(2, 3))
+                            else:
+                                logger.info("Không tìm thấy nút chuyển trang, kết thúc")
+                                break
+                        except Exception as e:
+                            logger.error(f"Lỗi khi chuyển trang comment: {e}")
+                            break
             
+                # Lưu comments vào database sử dụng SQLiteHelper
+                if comments:
+                    logger.info(f"Lưu {len(comments)} comment cho truyện ID {comic_id}")
+                    # Sửa nguồn dữ liệu từ Manhuavn thành NetTruyen
+                    self.sqlite_helper.save_comments_to_db(comic_id, comments, "NetTruyen")
+                
+            except Exception as e:
+                logger.error(f"Lỗi khi crawl comment: {e}")
+            finally:
+                # Trả driver vào pool thay vì quit
+                driver_pool.return_driver(driver)
+        
         except Exception as e:
-            logger.error(f"Lỗi khi crawl comment: {e}")
+            logger.error(f"Lỗi khi chuẩn bị crawl comment: {e}")
         finally:
-            driver.quit()
+            # Đóng tất cả driver trong pool khi hoàn thành
+            driver_pool.close_all()
             
         logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
         return comments

@@ -4,6 +4,7 @@ import random
 import logging
 import re
 import os
+import queue
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -15,6 +16,63 @@ import threading
 from utils.sqlite_helper import SQLiteHelper
 
 logger = logging.getLogger(__name__)
+
+class DriverPool:
+    """Quản lý pool của WebDriver để tái sử dụng giữa các threads"""
+    
+    def __init__(self, max_drivers=25, setup_func=None):
+        self.drivers = queue.Queue()
+        self.max_drivers = max_drivers
+        self.setup_func = setup_func
+        self.active_drivers = 0
+        self.lock = threading.Lock()
+        self.all_drivers = []  # Để theo dõi tất cả driver đã tạo
+    
+    def get_driver(self):
+        """Lấy driver từ pool hoặc tạo mới nếu cần"""
+        try:
+            # Thử lấy driver có sẵn từ pool
+            return self.drivers.get_nowait()
+        except queue.Empty:
+            # Nếu pool rỗng và chưa đạt giới hạn, tạo driver mới
+            with self.lock:
+                if self.active_drivers < self.max_drivers:
+                    driver = self.setup_func()
+                    self.active_drivers += 1
+                    self.all_drivers.append(driver)
+                    return driver
+                else:
+                    # Đã đạt giới hạn, đợi 1 driver được trả về
+                    logger.info("Đã đạt giới hạn driver, đợi driver được trả về")
+                    return self.drivers.get()
+    
+    def return_driver(self, driver):
+        """Trả driver về pool để tái sử dụng"""
+        if driver:
+            # Xóa sạch cookies trước khi tái sử dụng
+            try:
+                driver.delete_all_cookies()
+            except:
+                pass
+            self.drivers.put(driver)
+    
+    def close_all(self):
+        """Đóng tất cả driver khi hoàn thành"""
+        logger.info(f"Đóng tất cả {len(self.all_drivers)} driver...")
+        for driver in self.all_drivers:
+            try:
+                driver.quit()
+            except:
+                pass
+        self.all_drivers.clear()
+        self.active_drivers = 0
+        
+        # Xóa queue
+        while not self.drivers.empty():
+            try:
+                self.drivers.get_nowait()
+            except:
+                break
 
 class ManhuavnCrawler(BaseCrawler):
     """Crawler cho trang Manhuavn"""
@@ -33,6 +91,9 @@ class ManhuavnCrawler(BaseCrawler):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
         }
+        
+        # Tạo một thread local storage để lưu kết nối SQLite cho mỗi thread
+        self.thread_local = threading.local()
         
         logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
         
@@ -109,35 +170,52 @@ class ManhuavnCrawler(BaseCrawler):
             return 0
     
     def crawl_basic_data(self, progress_callback=None):
-        """Crawl dữ liệu cơ bản từ Manhuavn"""
+        """Crawl dữ liệu cơ bản từ Manhuavn với pool driver"""
         start_time = time.time()
         comics_count = 0
         
         try:
-            # Lấy danh sách truyện
-            raw_comics = self.get_all_stories(self.max_pages, progress_callback)
-            logger.info(f"Đã lấy được {len(raw_comics)} truyện từ danh sách")
+            # Khởi tạo driver pool
+            driver_pool = DriverPool(max_drivers=self.worker_count, setup_func=self.setup_driver)
             
-            # Tạo counter để theo dõi số lượng đã lưu
+            # Lấy danh sách truyện (sử dụng driver riêng)
+            driver = self.setup_driver()
+            try:
+                raw_comics = self.get_all_stories(driver, self.max_pages, progress_callback)
+                logger.info(f"Đã lấy được {len(raw_comics)} truyện từ danh sách")
+            finally:
+                driver.quit()
+            
+            # Biến theo dõi số lượng comics đã xử lý
             processed_count = 0
             
-            # Function để xử lý một truyện
-            def process_comic(comic):
+            # Cấu trúc dữ liệu để theo dõi tiến độ
+            data_lock = threading.Lock()
+            batch_size = min(100, len(raw_comics)) 
+            
+            # Hàm xử lý một comic
+            def process_comic(comic, driver_pool, batch_stopping):
                 nonlocal processed_count
+                
+                if batch_stopping.is_set():
+                    return None
+                
+                # Lấy driver từ pool
+                driver = driver_pool.get_driver()
                 
                 try:
                     # Lấy thông tin chi tiết
-                    detailed_comic = self.get_story_details(comic)
+                    detailed_comic = self.get_story_details(comic, driver)
                     
                     if detailed_comic:
                         # Chuyển đổi định dạng
                         db_comic = self.transform_comic_data(detailed_comic)
                         
-                        # Lưu vào database bằng helper
+                        # Lưu vào database
                         self.sqlite_helper.save_comic_to_db(db_comic, "Manhuavn")
                         
                         # Cập nhật counter an toàn
-                        with lock:
+                        with data_lock:
                             processed_count += 1
                             
                             # Cập nhật tiến độ
@@ -145,28 +223,69 @@ class ManhuavnCrawler(BaseCrawler):
                                 progress = (processed_count / len(raw_comics)) * 100
                                 progress_callback.emit(int(progress))
                                 
-                            logger.info(f"Đã hoàn thành {processed_count}/{len(raw_comics)} truyện")
+                    return detailed_comic
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
+                    return None
+                finally:
+                    # Trả driver lại pool
+                    driver_pool.return_driver(driver)
             
-            # Dùng lock để đồng bộ cập nhật biến đếm và progress_callback
-            lock = threading.Lock()
-            
-            # Xử lý song song việc crawl + lưu dữ liệu
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                # Submit tất cả task
-                futures = [executor.submit(process_comic, comic) for comic in raw_comics]
+            # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
+            for i in range(0, len(raw_comics), batch_size):
+                batch_stopping = threading.Event()
                 
-                # Đợi tất cả hoàn thành
-                concurrent.futures.wait(futures)
-            
-            # Lấy số lượng đã xử lý
-            comics_count = processed_count
+                batch = raw_comics[i:i+batch_size]
+                logger.info(f"Xử lý batch {i//batch_size + 1}/{(len(raw_comics)-1)//batch_size + 1} ({len(batch)} truyện)")
                 
+                batch_comics_count = 0
+            
+                # Tạo executor mới cho mỗi batch
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+                    futures = {executor.submit(process_comic, comic, driver_pool, batch_stopping): comic for comic in batch}
+                    
+                    try:
+                        # Đợi các future hoàn thành với timeout
+                        for future in concurrent.futures.as_completed(futures, timeout=180):
+                            comic = futures[future]
+                            try:
+                                result = future.result()
+                                if result:
+                                    comics_count += 1
+                                    batch_comics_count += 1
+                                    logger.info(f"Hoàn thành {comics_count}/{len(raw_comics)}: {comic.get('Tên truyện', '')}")
+                            except Exception as e:
+                                logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"Timeout khi xử lý batch. Đã xử lý {comics_count} truyện.")
+                        batch_stopping.set()  # Chỉ đặt flag cho batch hiện tại
+                        
+                        # Hủy các future đang chạy
+                        for future in futures:
+                            if not future.done():
+                                future.cancel()
+                                
+                        logger.warning(f"Đã hủy batch {i//batch_size + 1} do timeout. Chuyển sang batch tiếp theo.")
+                    
+                    logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
+                    
+                # *** THAY ĐỔI QUAN TRỌNG: Thêm đoạn code dọn dẹp và nghỉ giữa các batch ***
+                # Gọi garbage collector
+                import gc
+                gc.collect()
+                
+                # Pause nhỏ giữa các batch để giải phóng tài nguyên
+                logger.info("Nghỉ giữa các batch để giải phóng tài nguyên...")
+                time.sleep(3)
+                        
         except Exception as e:
             logger.error(f"Lỗi trong quá trình crawl: {e}")
         finally:
+            # Đóng tất cả driver
+            if 'driver_pool' in locals():
+                driver_pool.close_all()
+            
             # Đóng tất cả kết nối SQLite trong thread hiện tại
             self.sqlite_helper.close_all_connections()
             
@@ -179,9 +298,8 @@ class ManhuavnCrawler(BaseCrawler):
             "website": "Manhuavn"
         }
     
-    def get_all_stories(self, max_pages=None, progress_callback=None):
+    def get_all_stories(self, driver, max_pages=None, progress_callback=None):
         """Lấy danh sách truyện từ nhiều trang"""
-        driver = self.setup_driver()
         stories = []
         page = 1
         
@@ -232,16 +350,12 @@ class ManhuavnCrawler(BaseCrawler):
                 
         except Exception as e:
             logger.error(f"Lỗi khi lấy danh sách truyện: {e}")
-        finally:
-            driver.quit()
             
         logger.info(f"Đã tìm thấy {len(stories)} truyện để crawl")
         return stories
         
-    def get_story_details(self, story):
+    def get_story_details(self, story, driver):
         """Lấy thông tin chi tiết của truyện"""
-        driver = self.setup_driver()
-        
         try:
             for attempt in range(5):
                 try:
@@ -255,7 +369,6 @@ class ManhuavnCrawler(BaseCrawler):
                     time.sleep(random.uniform(2, 4))
             else:
                 logger.error("Không thể truy cập trang sau 5 lần thử")
-                driver.quit()
                 return None
 
             # Lấy thông tin chi tiết
@@ -277,30 +390,18 @@ class ManhuavnCrawler(BaseCrawler):
                 story["Tác giả"] = author_element.text.strip()
             except:
                 story["Tác giả"] = "N/A"
-                
-            # # Lấy thể loại
-            # try:
-            #     genre_elements = driver.find_elements(By.CSS_SELECTOR, "li.kind.row a")
-            #     genres = [genre.text.strip() for genre in genre_elements if genre.text.strip()]
-            #     story["Thể loại"] = ", ".join(genres)
-            # except Exception:
-            #     story["Thể loại"] = "Chưa phân loại"
 
         except Exception as e:
             logger.error(f"Lỗi khi lấy thông tin chi tiết truyện {story.get('Tên truyện')}: {e}")
-            story = None
-        finally:
-            driver.quit()
+            return None
             
         return story
     
     def transform_comic_data(self, raw_comic):
         """Chuyển đổi dữ liệu raw sang định dạng database"""
-        # Chuyển đổi từ định dạng của Manhuavn sang định dạng chung
         return {
             "ten_truyen": raw_comic.get("Tên truyện", ""),
             "tac_gia": raw_comic.get("Tác giả", "N/A"),
-            # "the_loai": raw_comic.get("Thể loại", ""),
             "mo_ta": raw_comic.get("Mô tả", ""),
             "link_truyen": raw_comic.get("Link truyện", ""),
             "so_chuong": int(raw_comic.get("Số chương", "0")) if raw_comic.get("Số chương", "0").isdigit() else 0,

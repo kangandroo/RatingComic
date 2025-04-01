@@ -3,6 +3,8 @@ import time
 import random
 import logging
 import re
+import os
+import queue
 import threading
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -11,10 +13,66 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import concurrent.futures
-import os
 from utils.sqlite_helper import SQLiteHelper
 
 logger = logging.getLogger(__name__)
+
+class DriverPool:
+    """Quản lý pool của WebDriver để tái sử dụng giữa các threads"""
+    
+    def __init__(self, max_drivers=25, setup_func=None):
+        self.drivers = queue.Queue()
+        self.max_drivers = max_drivers
+        self.setup_func = setup_func
+        self.active_drivers = 0
+        self.lock = threading.Lock()
+        self.all_drivers = []  # Để theo dõi tất cả driver đã tạo
+    
+    def get_driver(self):
+        """Lấy driver từ pool hoặc tạo mới nếu cần"""
+        try:
+            # Thử lấy driver có sẵn từ pool
+            return self.drivers.get_nowait()
+        except queue.Empty:
+            # Nếu pool rỗng và chưa đạt giới hạn, tạo driver mới
+            with self.lock:
+                if self.active_drivers < self.max_drivers:
+                    driver = self.setup_func()
+                    self.active_drivers += 1
+                    self.all_drivers.append(driver)
+                    return driver
+                else:
+                    # Đã đạt giới hạn, đợi 1 driver được trả về
+                    logger.info("Đã đạt giới hạn driver, đợi driver được trả về")
+                    return self.drivers.get()
+    
+    def return_driver(self, driver):
+        """Trả driver về pool để tái sử dụng"""
+        if driver:
+            # Xóa sạch cookies trước khi tái sử dụng
+            try:
+                driver.delete_all_cookies()
+            except:
+                pass
+            self.drivers.put(driver)
+    
+    def close_all(self):
+        """Đóng tất cả driver khi hoàn thành"""
+        logger.info(f"Đóng tất cả {len(self.all_drivers)} driver...")
+        for driver in self.all_drivers:
+            try:
+                driver.quit()
+            except:
+                pass
+        self.all_drivers.clear()
+        self.active_drivers = 0
+        
+        # Xóa queue
+        while not self.drivers.empty():
+            try:
+                self.drivers.get_nowait()
+            except:
+                break
 
 class TruyenQQCrawler(BaseCrawler):
     """Crawler cho trang TruyenQQ dựa trên code mẫu đã được tối ưu"""
@@ -34,6 +92,11 @@ class TruyenQQCrawler(BaseCrawler):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
         }
+        
+        # Tạo một thread local storage để lưu kết nối SQLite cho mỗi thread
+        self.thread_local = threading.local()
+        
+        logger.info(f"Khởi tạo TruyenQQCrawler với base_url={self.base_url}")
     
     def create_chrome_driver(self):
         """Tạo và cấu hình Chrome WebDriver với các tùy chọn vô hiệu hóa TensorFlow và GPU"""
@@ -179,21 +242,21 @@ class TruyenQQCrawler(BaseCrawler):
         
         return 0  # Trả về 0 nếu không tìm thấy số chương
     
-    def crawl_basic_data(self, progress_callback=None):
-        """Crawl dữ liệu cơ bản của truyện từ trang TruyenQQ sử dụng SQLiteHelper thread-safe"""
-        start_time = time.time()
+    def get_comic_listings(self, max_pages=None, progress_callback=None):
+        """Lấy danh sách truyện từ các trang danh sách"""
         all_comics = []
         page_num = 1
+        driver = None
         
         try:
-            logger.info(f"Bắt đầu crawl từ {self.base_url}")
-            
             # Số trang tối đa
-            max_pages = self.max_pages if self.max_pages else 999
+            max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 999
+            
+            # Khởi tạo driver riêng cho việc thu thập danh sách truyện
+            driver = self.create_chrome_driver()
             
             # Duyệt qua từng trang
             while page_num <= max_pages:
-                driver = self.create_chrome_driver()
                 try:
                     url = f"{self.base_url}/truyen-moi-cap-nhat/trang-{page_num}.html"
                     logger.info(f"Đang crawl trang {page_num}: {url}")
@@ -257,7 +320,7 @@ class TruyenQQCrawler(BaseCrawler):
                         
                         # Cập nhật tiến trình
                         if progress_callback:
-                            progress = min(50, (page_num / max_pages) * 50)  # Giới hạn 50% cho giai đoạn crawl danh sách
+                            progress = min(25, (page_num / max_pages) * 25)  # Giới hạn 25% cho giai đoạn crawl danh sách
                             progress_callback.emit(int(progress))
                         
                     except Exception as e:
@@ -268,91 +331,153 @@ class TruyenQQCrawler(BaseCrawler):
                     logger.error(f"Lỗi khi truy cập trang {page_num}: {str(e)}")
                     break  
                     
-                finally:
+                # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn
+                time.sleep(random.uniform(1, 3))
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy danh sách truyện: {str(e)}")
+            
+        finally:
+            # Đóng driver sau khi sử dụng xong
+            if driver:
+                try:
                     driver.quit()
-                    # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn
-                    time.sleep(random.uniform(1, 3))
+                except:
+                    pass
+                    
+        logger.info(f"Tổng cộng đã tìm thấy {len(all_comics)} truyện")
+        return all_comics
+    
+    def crawl_basic_data(self, progress_callback=None):
+        """Crawl dữ liệu cơ bản của truyện từ trang TruyenQQ với cơ chế batch và pool driver"""
+        start_time = time.time()
+        comics_count = 0
+        
+        try:
+            # Khởi tạo driver pool
+            driver_pool = DriverPool(max_drivers=self.worker_count, setup_func=self.create_chrome_driver)
             
-            # # Xử lý chi tiết từng truyện
-            # logger.info(f"Tổng cộng {len(all_comics)} truyện cần lấy thông tin chi tiết")
+            # Lấy danh sách truyện (sử dụng hàm riêng không dùng pool)
+            raw_comics = self.get_comic_listings(self.max_pages, progress_callback)
+            logger.info(f"Đã lấy được {len(raw_comics)} truyện từ danh sách")
             
-            # Biến đếm cho số lượng truyện đã xử lý
+            # Biến theo dõi số lượng comics đã xử lý
             processed_count = 0
             
-            # Lock để đồng bộ hóa cập nhật biến processed_count
-            lock = threading.Lock()
+            # Cấu trúc dữ liệu để theo dõi tiến độ
+            data_lock = threading.Lock()
+            batch_size = min(100, len(raw_comics)) 
             
-            # Function để xử lý một truyện
-            def process_comic(comic):
+            # Hàm xử lý một comic
+            def process_comic(comic, driver_pool, batch_stopping):
                 nonlocal processed_count
+                
+                if batch_stopping.is_set():
+                    return None
+                
+                # Lấy driver từ pool
+                driver = driver_pool.get_driver()
                 
                 try:
                     # Lấy thông tin chi tiết
-                    detailed_comic = self.crawl_comic_details(comic)
+                    detailed_comic = self.crawl_comic_details_with_driver(comic, driver)
                     
-                    # Lưu vào database bằng SQLiteHelper
-                    comic_id = self.sqlite_helper.save_comic_to_db(detailed_comic, "TruyenQQ")
-                    
-                    # Cập nhật biến đếm an toàn
-                    with lock:
-                        processed_count += 1
+                    if detailed_comic:
+                        # Lưu vào database
+                        self.sqlite_helper.save_comic_to_db(detailed_comic, "TruyenQQ")
                         
-                        # Cập nhật tiến trình
-                        if progress_callback and len(all_comics) > 0:
-                            progress = 50 + (processed_count / len(all_comics) * 50)  # 50% còn lại cho chi tiết
-                            progress_callback.emit(int(min(progress, 100)))
-                    
-                    # Log mỗi 5 truyện
-                    if processed_count % 5 == 0:
-                        logger.info(f"Đã xử lý và lưu: {processed_count}/{len(all_comics)} truyện")
-                        
-                    return comic_id
+                        # Cập nhật counter an toàn
+                        with data_lock:
+                            processed_count += 1
+                            
+                            # Cập nhật tiến độ
+                            if progress_callback and len(raw_comics) > 0:
+                                progress = 25 + (processed_count / len(raw_comics)) * 75
+                                progress_callback.emit(int(min(progress, 100)))
+                                
+                    return detailed_comic
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý truyện {comic.get('ten_truyen', '')}: {e}")
                     return None
+                finally:
+                    # Trả driver lại pool
+                    driver_pool.return_driver(driver)
             
-            # Xử lý song song với SQLiteHelper
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                # Submit tất cả task
-                futures = [executor.submit(process_comic, comic) for comic in all_comics]
+            # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
+            for i in range(0, len(raw_comics), batch_size):
+                # Mỗi batch có một flag batch_stopping riêng
+                batch_stopping = threading.Event()
                 
-                # Đợi tất cả hoàn thành
-                concurrent.futures.wait(futures)
-            
-            # Tính thời gian thực hiện
-            time_taken = time.time() - start_time
-            
-            # Cập nhật tiến trình cuối cùng
-            if progress_callback:
-                progress_callback.emit(100)
-            
-            logger.info(f"Đã hoàn thành crawl, thu thập và lưu được {processed_count} truyện")
+                batch = raw_comics[i:i+batch_size]
+                logger.info(f"Xử lý batch {i//batch_size + 1}/{(len(raw_comics)-1)//batch_size + 1} ({len(batch)} truyện)")
+                
+                batch_comics_count = 0
+                
+                # Tạo executor mới cho mỗi batch
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+                    futures = {executor.submit(process_comic, comic, driver_pool, batch_stopping): comic for comic in batch}
+                    
+                    try:
+                        # Đợi các future hoàn thành với timeout
+                        for future in concurrent.futures.as_completed(futures, timeout=180):
+                            comic = futures[future]
+                            try:
+                                result = future.result()
+                                if result:
+                                    comics_count += 1
+                                    batch_comics_count += 1
+                                    logger.info(f"Hoàn thành {comics_count}/{len(raw_comics)}: {comic.get('ten_truyen', '')}")
+                            except Exception as e:
+                                logger.error(f"Lỗi khi xử lý truyện {comic.get('ten_truyen', '')}: {e}")
+                    except concurrent.futures.TimeoutError:
+                        # Đếm số lượng tasks hoàn thành và chưa hoàn thành
+                        completed = sum(1 for f in futures if f.done())
+                        pending = sum(1 for f in futures if not f.done())
+                        
+                        logger.warning(f"Timeout khi xử lý batch. Đã xử lý {completed}/{len(futures)} tasks trong batch hiện tại. Còn {pending} tasks đang chờ.")
+                        logger.warning(f"Tổng số truyện đã xử lý: {comics_count}")
+                        
+                        batch_stopping.set()  # Chỉ dừng batch hiện tại
+                        
+                        # Hủy các future đang chạy
+                        for future in futures:
+                            if not future.done():
+                                future.cancel()
+                        
+                        logger.warning(f"Đã hủy batch {i//batch_size + 1} do timeout. Chuyển sang batch tiếp theo.")
+                    
+                    logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
+                
+                # Gọi garbage collector
+                import gc
+                gc.collect()
+                
+                # Pause nhỏ giữa các batch để giải phóng tài nguyên
+                logger.info("Nghỉ giữa các batch để giải phóng tài nguyên...")
+                time.sleep(3)
+                    
+        except Exception as e:
+            logger.error(f"Lỗi trong quá trình crawl: {e}")
+        finally:
+            # Đóng tất cả driver
+            if 'driver_pool' in locals():
+                driver_pool.close_all()
             
             # Đóng tất cả kết nối SQLite trong thread hiện tại
             self.sqlite_helper.close_all_connections()
             
-            return {
-                "count": processed_count,
-                "website": "TruyenQQ",
-                "time_taken": time_taken
-            }
-            
-        except Exception as e:
-            logger.error(f"Lỗi khi crawl dữ liệu: {str(e)}")
-            
-            # Đảm bảo đóng kết nối trong mọi trường hợp
-            try:
-                self.sqlite_helper.close_all_connections()
-            except:
-                pass
-                
-            raise
-    
-    def crawl_comic_details(self, comic):
-        """Crawl thông tin chi tiết của một truyện"""
-        driver = self.create_chrome_driver()
+            elapsed_time = time.time() - start_time
+            logger.info(f"Đã crawl {comics_count} truyện trong {elapsed_time:.2f} giây")
         
+        return {
+            "count": comics_count,
+            "time_taken": time.time() - start_time,
+            "website": "TruyenQQ"
+        }
+    
+    def crawl_comic_details_with_driver(self, comic, driver):
+        """Crawl thông tin chi tiết của một truyện với driver được cung cấp từ pool"""
         try:
             comic_url = comic["link_truyen"]
             logger.debug(f"Đang crawl chi tiết truyện: {comic_url}")
@@ -369,7 +494,6 @@ class TruyenQQCrawler(BaseCrawler):
                     time.sleep(random.uniform(2, 4))
             else:
                 logger.error("Không thể truy cập trang sau 5 lần thử")
-                driver.quit()
                 return comic
             
             # Kiểm tra xem có phần tử tên khác không
@@ -389,11 +513,6 @@ class TruyenQQCrawler(BaseCrawler):
                 comic["luot_theo_doi"] = self.get_text_safe(driver, "li:nth-child(4) p.col-xs-9")
                 comic["luot_xem"] = self.get_text_safe(driver, "li:nth-child(5) p.col-xs-9")
             
-            # # Lấy thể loại
-            # genre_elems = driver.find_elements(By.CSS_SELECTOR, "li.kind.row p.col-xs-9 a")
-            # the_loai = ", ".join([elem.text.strip() for elem in genre_elems]) if genre_elems else "N/A"
-            # comic["the_loai"] = the_loai
-            
             # Cố gắng nhấp vào "Xem thêm" nếu có để lấy mô tả đầy đủ
             try:
                 readmore_button = WebDriverWait(driver, 3).until(
@@ -407,16 +526,6 @@ class TruyenQQCrawler(BaseCrawler):
             # Lấy mô tả
             comic["mo_ta"] = self.get_text_safe(driver, "div.story-detail-info.detail-content")
             
-            # # Đếm số bình luận
-            # comment_count = 0
-            # try:
-            #     comment_elems = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
-            #     comment_count = len(comment_elems)
-            # except:
-            #     pass
-            
-            # comic["so_binh_luan"] = comment_count
-            
             # Chuyển các giá trị sang số
             try:
                 comic["luot_xem"] = self.extract_number(comic["luot_xem"])
@@ -427,9 +536,19 @@ class TruyenQQCrawler(BaseCrawler):
         except Exception as e:
             logger.error(f"Lỗi khi crawl chi tiết truyện: {str(e)}")
             # Đảm bảo vẫn trả về đối tượng comic với thông tin cơ bản
-        finally:
-            driver.quit()
+        
         return comic
+    
+    def crawl_comic_details(self, comic):
+        """Crawl thông tin chi tiết của một truyện (phiên bản truyền thống dùng cho API)"""
+        driver = self.create_chrome_driver()
+        
+        try:
+            result = self.crawl_comic_details_with_driver(comic, driver)
+            return result
+        finally:
+            if driver:
+                driver.quit()
     
     def crawl_comments(self, comic):
         """Crawl comment cho một truyện cụ thể"""
@@ -468,7 +587,7 @@ class TruyenQQCrawler(BaseCrawler):
             
             # Lặp qua các trang comment
             page_comment = 1
-            max_pages = 10  # Giới hạn số trang để tránh treo
+            max_pages = 100  # Giới hạn số trang để tránh treo
             while page_comment <= max_pages:
                 try:
                     # Debug thông tin trang hiện tại
