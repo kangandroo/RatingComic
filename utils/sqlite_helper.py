@@ -41,7 +41,7 @@ class SQLiteHelper:
         for source in self.schemas.keys():
             self.pool_locks[source] = threading.Lock()
         
-        logger.info(f"Khởi tạo SQLiteHelper với db_folder: {db_folder}, pool_size: {pool_size}")
+        # logger.info(f"Khởi tạo SQLiteHelper với db_folder: {db_folder}, pool_size: {pool_size}")
     
     # [Các phương thức _get_*_schema() giữ nguyên]
     def _get_truyenqq_schema(self):

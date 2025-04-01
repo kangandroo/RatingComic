@@ -538,8 +538,8 @@ class NetTruyenCrawler(BaseCrawler):
         }
     
     def crawl_comments(self, comic):
-        """Crawl comment cho một truyện cụ thể - với cải tiến driver pool"""
-        driver_pool = DriverPool(max_drivers=1, setup_func=self.setup_driver)
+        """Crawl comment cho một truyện cụ thể - trong thread phân tích"""
+        driver = self.setup_driver()
         comments = []
         unique_contents = set()
         duplicate_found = False
@@ -547,218 +547,122 @@ class NetTruyenCrawler(BaseCrawler):
         try:
             # Lấy link từ comic
             link = comic.get("link_truyen")
-            comic_id = comic.get("id")
-            
-            if not link or not comic_id:
-                logger.error(f"Không tìm thấy link hoặc ID truyện cho: {comic.get('ten_truyen', 'Unknown')}")
+            if not link:
+                logger.error(f"Không tìm thấy link truyện cho: {comic.get('ten_truyen')}")
+                driver.quit()
                 return []
             
-            logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
+            # logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
             
-            # Lấy driver từ pool
-            driver = driver_pool.get_driver()
-            
+            driver.get(link)
+            time.sleep(random.uniform(2, 3))
+
+            # Gọi hàm joinComment() để chuyển đến phần comment
             try:
-                # Thử truy cập trang với retry
-                for attempt in range(3):
-                    try:
-                        driver.get(link)
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, ".title-detail"))
-                        )
-                        break
-                    except Exception as e:
-                        if attempt == 2:  # nếu lần cuối vẫn lỗi
-                            logger.error(f"Không thể truy cập trang sau 3 lần thử: {e}")
-                            return []
-                        time.sleep(random.uniform(2, 3))
+                driver.execute_script("joinComment()")
+                time.sleep(random.uniform(2, 3))
+            except Exception:
+                logger.warning("Không thể gọi hàm joinComment")
+                
+            page_comment = 1
+            max_comment_pages = 1000  
+            while page_comment <= max_comment_pages:
+                comments_in_current_page = 0
 
-                # Gọi hàm joinComment() để chuyển đến phần comment
+                # Lấy danh sách bình luận với selector cụ thể
                 try:
-                    driver.execute_script("joinComment()")
-                    time.sleep(random.uniform(2, 3))
-                except Exception as e:
-                    logger.warning(f"Không thể gọi hàm joinComment: {e}")
+                    comment_elements = WebDriverWait(driver, 5).until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".info"))
+                    )
                     
-                page_comment = 1
-                max_comment_pages = 20  # Giảm giới hạn từ 1000 xuống 20 để tránh treo
-                
-                # Xóa cache và cookie để cải thiện hiệu suất
-                try:
-                    driver.execute_script("window.localStorage.clear();")
-                    driver.execute_script("window.sessionStorage.clear();")
-                except:
-                    pass
-                
-                while page_comment <= max_comment_pages and not duplicate_found:
-                    comments_in_current_page = 0
-
-                    # Lấy danh sách bình luận - sử dụng selector đặc thù của NetTruyen
-                    try:
-                        # Thử nhiều selector khác nhau cho NetTruyen
-                        selectors = [
-                            ".info"
-                        ]
-                        
-                        comment_elements = []
-                        for selector in selectors:
-                            try:
-                                elements = WebDriverWait(driver, 3).until(
-                                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
-                                )
-                                if elements:
-                                    comment_elements = elements
-                                    logger.info(f"Tìm thấy {len(elements)} comments với selector '{selector}'")
-                                    break
-                            except:
-                                continue
-                        
-                        if not comment_elements:
-                            logger.info("Không tìm thấy comment trong trang")
-                            break
-                            
-                        for comment in comment_elements:
-                            # Lấy tên người bình luận - điều chỉnh selector cho NetTruyen
-                            name = "Người dùng ẩn danh"
-                            try:
-                                # Thử nhiều selector
-                                name_selectors = [
-                                    ".comment-header span.authorname.name-1", 
-                                    ".head-comment strong.name-1",
-                                    ".outsite-comment div.outline-content-comment div:nth-child(1) strong",
-                                    "strong.name-1"
-                                ]
-                                
-                                for selector in name_selectors:
-                                    try:
-                                        name_elem = comment.find_element(By.CSS_SELECTOR, selector)
-                                        if name_elem:
-                                            name = name_elem.text.strip()
-                                            if name:
-                                                break
-                                    except:
-                                        continue
-                                        
-                                # Nếu không tìm thấy qua CSS, thử JavaScript
-                                if name == "Người dùng ẩn danh":
-                                    name = driver.execute_script("""
-                                        return arguments[0].querySelector('div strong')?.innerText || 
-                                            arguments[0].querySelector('strong')?.innerText || 
-                                            "Người dùng ẩn danh";
-                                    """, comment)
-                            except:
-                                pass
-                            
-                            # Lấy nội dung bình luận - điều chỉnh selector cho NetTruyen
-                            content = "N/A"
-                            try:
-                                # Thử nhiều selector
-                                content_selectors = [
-                                    ".info div.comment-content", 
-                                    ".content-comment",
-                                    ".outsite-comment div.outline-content-comment div.content-comment"
-                                ]
-                                
-                                for selector in content_selectors:
-                                    try:
-                                        content_elem = comment.find_element(By.CSS_SELECTOR, selector)
-                                        if content_elem:
-                                            content = content_elem.text.strip()
-                                            if content:
-                                                break
-                                    except:
-                                        continue
-                                        
-                                # Nếu không tìm thấy qua CSS, thử JavaScript
-                                if content == "N/A":
-                                    content = driver.execute_script("""
-                                        return arguments[0].querySelector('div.content-comment')?.innerText || 
-                                            arguments[0].querySelector('div[class*="content"]')?.innerText || 
-                                            "N/A";
-                                    """, comment)
-                            except:
-                                pass
-                            
-                            # Kiểm tra xem nội dung bình luận đã tồn tại chưa
-                            if content != "N/A" and content in unique_contents:
-                                duplicate_found = True
-                                logger.info("Phát hiện comment trùng lặp, sẽ dừng crawl")
-                                break
-                            
-                            # Nếu nội dung khác N/A, thêm vào tập hợp để kiểm tra trùng lặp sau này
-                            if content != "N/A":
-                                unique_contents.add(content)
-                            
-                            # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
-                            comments.append({
-                                "ten_nguoi_binh_luan": name,
-                                "noi_dung": content,
-                                "comic_id": comic_id
-                            })
-                            comments_in_current_page += 1
-                        
-                        # Nếu phát hiện bình luận trùng lặp, dừng việc chuyển trang
-                        if duplicate_found:
-                            break
-                        
-                        # Thêm điều kiện dừng: Nếu số lượng bình luận trong trang < 10
-                        if comments_in_current_page < 10:
-                            logger.info(f"Số lượng comment trang {page_comment} < 10, dừng crawl")
-                            break
-                            
-                    except Exception as e:
-                        logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
+                    if not comment_elements:
+                        logger.info("Không tìm thấy comment trong trang")
                         break
-
-                    # Tìm nút chuyển trang bình luận
-                    if not duplicate_found:
+                        
+                    for comment in comment_elements:
+                        # Lấy tên người bình luận
                         try:
-                            # Thử nhiều cách để tìm nút "Sau" hoặc "Next"
-                            next_button_selectors = [
-                                "/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[6]/a"
-                            ]
-                            
-                            next_button = None
-                            for selector in next_button_selectors:
-                                next_buttons = driver.find_elements(By.XPATH, selector)
-                                if next_buttons and len(next_buttons) > 0:
-                                    next_button = next_buttons[0]
-                                    break
-                                    
-                            if next_button and next_button.is_displayed():
-                                # Scroll đến nút để đảm bảo có thể click
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
-                                time.sleep(0.5)
-                                
-                                # Thử click bằng JavaScript để tránh lỗi "element not clickable"
-                                driver.execute_script("arguments[0].click();", next_button)
-                                page_comment += 1
-                                logger.info(f"Chuyển sang trang comment {page_comment}")
-                                time.sleep(random.uniform(2, 3))
-                            else:
-                                logger.info("Không tìm thấy nút chuyển trang, kết thúc")
-                                break
-                        except Exception as e:
-                            logger.error(f"Lỗi khi chuyển trang comment: {e}")
+                            name_elem = comment.find_element(By.CSS_SELECTOR, ".comment-header span.authorname.name-1")
+                            name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
+                        except:
+                            name = "Người dùng ẩn danh"
+                        
+                        # Lấy nội dung bình luận
+                        try:
+                            content_elem = comment.find_element(By.CSS_SELECTOR, ".info div.comment-content")
+                            content = content_elem.text.strip() if content_elem.text else "N/A"
+                        except:
+                            content = "N/A"
+                        
+                        # Kiểm tra xem nội dung bình luận đã tồn tại chưa
+                        if content != "N/A" and content in unique_contents:
+                            duplicate_found = True
+                            logger.info("Phát hiện comment trùng lặp, sẽ dừng crawl")
                             break
+                        
+                        # Nếu nội dung khác N/A, thêm vào tập hợp để kiểm tra trùng lặp sau này
+                        if content != "N/A":
+                            unique_contents.add(content)
+                        
+                        # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
+                        comments.append({
+                            "ten_nguoi_binh_luan": name,
+                            "noi_dung": content,
+                            "comic_id": comic.get("id")
+                        })
+                        comments_in_current_page += 1
+                    
+                    # Nếu phát hiện bình luận trùng lặp, dừng việc chuyển trang
+                    if duplicate_found:
+                        break
+                    
+                    # Thêm điều kiện dừng: Nếu số lượng bình luận trong trang < 10
+                    if comments_in_current_page < 10:
+                        logger.info(f"Số lượng comment trang {page_comment} < 10, dừng crawl")
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
+                    break
+
+                # Nếu phát hiện bình luận trùng lặp, không tiếp tục chuyển trang
+                if duplicate_found:
+                    break
+
+                # Tìm nút chuyển trang bình luận
+                try:
+                    # Thử nhiều cách để tìm nút "Sau" hoặc "Next"
+                    next_button_selectors = [
+                        "/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[6]/a",
+                        "//a[contains(text(), 'Sau')]",
+                        "//a[contains(text(), 'Next')]",
+                        "//li[contains(@class, 'next')]/a"
+                    ]
+                    
+                    next_button = None
+                    for selector in next_button_selectors:
+                        next_buttons = driver.find_elements(By.XPATH, selector)
+                        if next_buttons:
+                            next_button = next_buttons[0]
+                            break
+                            
+                    if next_button:
+                        driver.execute_script("arguments[0].click();", next_button)
+                        page_comment += 1
+                        logger.info(f"Chuyển sang trang comment {page_comment}")
+                        time.sleep(random.uniform(2, 3))
+                    else:
+                        logger.info("Không tìm thấy nút chuyển trang, kết thúc")
+                        break
+                except Exception as e:
+                    logger.error(f"Lỗi khi chuyển trang comment: {e}")
+                    break
             
-                # Lưu comments vào database sử dụng SQLiteHelper
-                if comments:
-                    logger.info(f"Lưu {len(comments)} comment cho truyện ID {comic_id}")
-                    # Sửa nguồn dữ liệu từ Manhuavn thành NetTruyen
-                    self.sqlite_helper.save_comments_to_db(comic_id, comments, "NetTruyen")
-                
-            except Exception as e:
-                logger.error(f"Lỗi khi crawl comment: {e}")
-            finally:
-                # Trả driver vào pool thay vì quit
-                driver_pool.return_driver(driver)
-        
         except Exception as e:
-            logger.error(f"Lỗi khi chuẩn bị crawl comment: {e}")
+            logger.error(f"Lỗi khi crawl comment: {e}")
         finally:
-            # Đóng tất cả driver trong pool khi hoàn thành
-            driver_pool.close_all()
+            if driver:
+                driver.quit()
             
         logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
         return comments
