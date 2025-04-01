@@ -1,13 +1,14 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QPushButton, QProgressBar, QTableWidget, 
                             QTableWidgetItem, QCheckBox, QHeaderView, QMessageBox,
-                            QSpinBox, QGroupBox, QApplication)
+                            QSpinBox, QGroupBox, QApplication, QFileDialog)
 from PyQt6.QtCore import Qt, QThreadPool, pyqtSignal, pyqtSlot, QTimer
 from analysis.rating_thread import RatingCalculationThread
 import logging
 import time
 from analysis.rating_factory import RatingFactory
-
+import pandas as pd
+import os
 from utils.worker import Worker
 from crawlers.crawler_factory import CrawlerFactory
 
@@ -142,6 +143,9 @@ class WebsiteTab(QWidget):
 
         self.select_for_analysis_button = QPushButton("Chọn để phân tích")
         self.select_for_analysis_button.clicked.connect(self.select_for_analysis)
+        
+        self.export_excel_button = QPushButton("Xuất Excel")
+        self.export_excel_button.clicked.connect(self.export_to_excel)
 
         filter_layout.addWidget(filter_label)
         filter_layout.addStretch()
@@ -151,6 +155,7 @@ class WebsiteTab(QWidget):
         filter_layout.addWidget(self.apply_sort_button)
         filter_layout.addWidget(self.select_all_checkbox)
         filter_layout.addWidget(self.select_for_analysis_button)
+        filter_layout.addWidget(self.export_excel_button)
 
         # Results table
         self.results_table = QTableWidget()
@@ -189,6 +194,104 @@ class WebsiteTab(QWidget):
         # Enable drag and drop
         self.setAcceptDrops(True)
     
+    def export_to_excel(self):
+        """Xuất dữ liệu từ bảng kết quả ra file Excel"""
+        try:
+            # Lấy tên website hiện tại làm tên file mặc định
+            current_website = self.website_combo.currentText()
+            default_filename = f"{current_website}_comics_{time.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            
+            # Hiển thị hộp thoại chọn nơi lưu file
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Lưu file Excel", 
+                default_filename,
+                "Excel Files (*.xlsx)"
+            )
+            
+            if not file_path: 
+                return
+                
+            # Nếu người dùng không thêm .xlsx vào tên file, thêm đuôi
+            if not file_path.endswith('.xlsx'):
+                file_path += '.xlsx'
+            
+            # Kiểm tra xem có dữ liệu để xuất không
+            row_count = self.results_table.rowCount()
+            if row_count == 0:
+                QMessageBox.warning(self, "Cảnh báo", "Không có dữ liệu để xuất!")
+                return
+            
+            # Hiển thị dialog tiến trình
+            # progress_dialog = QMessageBox(self)
+            # progress_dialog.setWindowTitle("Đang xuất dữ liệu")
+            # progress_dialog.setText("Đang chuẩn bị dữ liệu để xuất ra Excel...")
+            # progress_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            # progress_dialog.show()
+            # QApplication.processEvents()
+            
+            # Thu thập dữ liệu từ bảng
+            data = []
+            headers = []
+            
+            # Lấy tên các cột (bỏ qua cột checkbox)
+            for col in range(1, self.results_table.columnCount()):
+                headers.append(self.results_table.horizontalHeaderItem(col).text())
+            
+            # Thu thập dữ liệu từng dòng
+            for row in range(row_count):
+                row_data = []
+                for col in range(1, self.results_table.columnCount()):
+                    item = self.results_table.item(row, col)
+                    if item is not None:
+                        row_data.append(item.text())
+                    else:
+                        row_data.append("")
+                data.append(row_data)
+            
+            # Tạo DataFrame từ dữ liệu
+            df = pd.DataFrame(data, columns=headers)
+            
+            # Cập nhật thông báo
+            # progress_dialog.setText("Đang ghi dữ liệu vào file Excel...")
+            QApplication.processEvents()
+            
+            # Xuất DataFrame ra file Excel
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name=current_website, index=False)
+                
+                # Điều chỉnh độ rộng cột
+                worksheet = writer.sheets[current_website]
+                for i, col in enumerate(df.columns):
+                    # Xác định độ rộng dựa trên giá trị dài nhất
+                    max_length = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                    worksheet.column_dimensions[chr(65 + i)].width = min(max_length, 50) 
+            
+            # Đóng dialog tiến trình
+            # progress_dialog.close()
+            
+            # Hiển thị thông báo thành công
+            QMessageBox.information(
+                self, 
+                "Xuất dữ liệu thành công", 
+                f"Đã xuất {row_count} dòng dữ liệu ra file:\n{file_path}"
+            )
+            
+            # Mở file hoặc thư mục chứa file
+            try:
+                if os.name == 'nt':  # Windows
+                    os.startfile(os.path.dirname(file_path))
+                elif os.name == 'posix':  # macOS và Linux
+                    import subprocess
+                    subprocess.call(['open', os.path.dirname(file_path)])
+            except Exception as e:
+                logger.warning(f"Không thể mở thư mục chứa file: {e}")
+            
+            logger.info(f"Đã xuất {row_count} dòng dữ liệu ra file: {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi xuất dữ liệu ra Excel: {e}")
+            QMessageBox.critical(self, "Lỗi", f"Không thể xuất file Excel: {str(e)}")
+
     def apply_sorting(self):
         """Áp dụng sắp xếp theo trường đã chọn"""
         field_index = self.sort_field_combo.currentIndex()
@@ -236,7 +339,24 @@ class WebsiteTab(QWidget):
         
         logger.info(f"Đã load {len(self.all_comics)} truyện từ nguồn {website}")
     
-    def populate_results_table(self):
+    def load_initial_data(self):
+        """Load dữ liệu ban đầu"""
+        
+        # Lấy website hiện tại
+        website = self.website_combo.currentText()
+        
+        # Đặt nguồn dữ liệu
+        self.db_manager.set_source(website)
+        
+        # Lấy danh sách truyện
+        self.all_comics = self.db_manager.get_all_comics()
+        
+        # Hiển thị danh sách truyện
+        self.populate_results_table(caculate_rating=False)
+        
+        logger.info(f"Đã load {len(self.all_comics)} truyện từ nguồn {website}")
+    
+    def populate_results_table(self, caculate_rating=True):
         """Hiển thị danh sách truyện trong bảng kết quả"""
         # Xóa dữ liệu cũ
         self.results_table.setRowCount(0)
@@ -251,12 +371,14 @@ class WebsiteTab(QWidget):
         need_calculation = self.display_all_comics()
         
         # Bắt đầu tính rating theo batch chỉ khi cần
-        if need_calculation:
+        if need_calculation and caculate_rating:
             self.start_batch_processing()
+        elif need_calculation:
+            logger.info("Bỏ qua rating")
         else:
             logger.info("Tất cả truyện đã có rating từ database, không cần tính toán lại")
     
-    def display_all_comics(self):
+    def display_all_comics(self, caculate_rating=True):
         """Hiển thị dữ liệu cơ bản cho tất cả truyện"""
         # Tạm thời tắt sorting
         self.results_table.setSortingEnabled(False)
@@ -668,7 +790,7 @@ class WebsiteTab(QWidget):
         self.all_comics = self.db_manager.get_all_comics()
         
         # Hiển thị danh sách truyện
-        self.populate_results_table()
+        self.populate_results_table(caculate_rating=True)
         
         logger.info(f"Đã chuyển sang nguồn: {website}, {len(self.all_comics)} truyện")
     
@@ -784,7 +906,7 @@ class WebsiteTab(QWidget):
         )
         
         # Hiển thị dữ liệu và bắt đầu tính toán rating
-        self.display_all_comics()
+        self.display_all_comics(caculate_rating=True)
         
         # Tính toán rating theo batch
         QTimer.singleShot(500, self.delayed_start_rating)
