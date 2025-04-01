@@ -565,7 +565,7 @@ class TruyenQQCrawler(BaseCrawler):
                     driver.quit()
                 return []
                 
-            logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')} (ID: {comic_id})")
+            # logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')} (ID: {comic_id})")
             
             # Khởi tạo WebDriver
             driver = self.create_chrome_driver()
@@ -587,7 +587,7 @@ class TruyenQQCrawler(BaseCrawler):
             
             # Lặp qua các trang comment
             page_comment = 1
-            max_pages = 100  # Giới hạn số trang để tránh treo
+            max_pages = 100  
             while page_comment <= max_pages:
                 try:
                     # Debug thông tin trang hiện tại

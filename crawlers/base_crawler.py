@@ -17,7 +17,7 @@ class BaseCrawler:
         """
         self.db_manager = db_manager
         self.config_manager = config_manager
-        logger.info("Khởi tạo BaseCrawler")
+        # logger.info("Khởi tạo BaseCrawler")
     
     def crawl_basic_data(self, progress_callback=None):
         """

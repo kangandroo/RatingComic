@@ -95,7 +95,7 @@ class ManhuavnCrawler(BaseCrawler):
         # Tạo một thread local storage để lưu kết nối SQLite cho mỗi thread
         self.thread_local = threading.local()
         
-        logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
+        # logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
         
     def setup_driver(self):
         """Cấu hình Chrome WebDriver tối ưu cho crawl đa luồng"""
@@ -259,7 +259,7 @@ class ManhuavnCrawler(BaseCrawler):
                                 logger.error(f"Lỗi khi xử lý truyện {comic.get('Tên truyện', '')}: {e}")
                     except concurrent.futures.TimeoutError:
                         logger.warning(f"Timeout khi xử lý batch. Đã xử lý {comics_count} truyện.")
-                        batch_stopping.set()  # Chỉ đặt flag cho batch hiện tại
+                        batch_stopping.set()  
                         
                         # Hủy các future đang chạy
                         for future in futures:
@@ -270,7 +270,6 @@ class ManhuavnCrawler(BaseCrawler):
                     
                     logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
                     
-                # *** THAY ĐỔI QUAN TRỌNG: Thêm đoạn code dọn dẹp và nghỉ giữa các batch ***
                 # Gọi garbage collector
                 import gc
                 gc.collect()
@@ -421,7 +420,7 @@ class ManhuavnCrawler(BaseCrawler):
         try:
             # Lấy link từ comic
             link = comic.get("link_truyen")
-            logger.info(f"Link truyện: {link}")
+            # logger.info(f"Link truyện: {link}")
             comic_id = comic.get("id")
             
             if not link or not comic_id:
@@ -445,7 +444,7 @@ class ManhuavnCrawler(BaseCrawler):
                 try:
                     load_more_button = driver.find_element(By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div[4]/div[2]/div[1]/div[4]/ul/div/button")
                     load_more_button.click()
-                    logger.info("Đang tải thêm bình luận...")
+                    # logger.info("Đang tải thêm bình luận...")
                     time.sleep(2)
                 except:
                     break
