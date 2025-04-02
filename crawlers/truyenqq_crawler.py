@@ -545,10 +545,10 @@ class TruyenQQCrawler(BaseCrawler):
         
         try:
             result = self.crawl_comic_details_with_driver(comic, driver)
-            return result
         finally:
             if driver:
                 driver.quit()
+        return result
     
     def crawl_comments(self, comic):
         """Crawl comment cho một truyện cụ thể"""
@@ -574,6 +574,8 @@ class TruyenQQCrawler(BaseCrawler):
                 driver.get(comic_url)
             except Exception as e:
                 logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
+                if driver:
+                    driver.quit()
                 return []
                         
             time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
