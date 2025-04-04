@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         # Thêm handler vào root logger
         logging.getLogger().addHandler(text_handler)
         
-        logger.info("Đã thiết lập logging cho UI")
+        # logger.info("Đã thiết lập logging cho UI")
     
     def update_selection(self, selected_comics):
         """

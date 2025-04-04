@@ -56,9 +56,9 @@ class TruyenQQRatingCalculator:
             norm_chapters = min(1.0, np.log10(chapter_count + 1) / np.log10(500))
             
             # Tính điểm từ các thành phần
-            view_score = (norm_views_total * 1.0) + (norm_views_efficiency * 3.0)
-            like_score = (norm_likes_total * 0.5) + (norm_likes_efficiency * 2.5)
-            follow_score = (norm_follows_total * 0.5) + (norm_follows_efficiency * 2.5)
+            view_score = (norm_views_total * 0.5) + (norm_views_efficiency * 1.5)
+            like_score = (norm_likes_total * 0.5) + (norm_likes_efficiency * 3.5)
+            follow_score = (norm_follows_total * 1) + (norm_follows_efficiency * 3)
             chapter_score = norm_chapters * 0
             
             # Điểm cơ bản

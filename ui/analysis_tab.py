@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QTabWidget, QTableWidget, QTableWidgetItem, 
                             QPushButton, QFileDialog, QHeaderView, QProgressBar,
-                            QMessageBox, QComboBox, QProgressDialog)
+                            QMessageBox, QComboBox, QProgressDialog, QSpinBox, QCheckBox)
 from PyQt6.QtCore import Qt, QThreadPool, pyqtSlot
 import logging
 import time
@@ -61,6 +61,22 @@ class DetailAnalysisTab(QWidget):
         self.progress_bar.setValue(0)
         main_layout.addWidget(self.progress_bar)
         
+        time_limit_layout = QHBoxLayout()
+        time_limit_layout.addWidget(QLabel("Giới hạn comment trong:"))
+        
+        self.limit_spinbox = QSpinBox() 
+        self.limit_spinbox.setRange(1, 30)
+        self.limit_spinbox.setValue(7) 
+        self.limit_spinbox.setSuffix(" ngày gần nhất")
+        time_limit_layout.addWidget(self.limit_spinbox)
+        
+        self.limit_checkbox = QCheckBox("Áp dụng giới hạn")
+        self.limit_checkbox.setChecked(True)
+        time_limit_layout.addWidget(self.limit_checkbox)
+        
+        time_limit_layout.addStretch()
+        main_layout.addLayout(time_limit_layout)
+            
         # Các tab kết quả
         self.result_tabs = QTabWidget()
         
@@ -780,6 +796,13 @@ class DetailAnalysisTab(QWidget):
         """Xử lý một batch truyện"""
         batch_results = []
         
+        time_limit = None
+        days_limit = None
+        if self.limit_checkbox.isChecked():
+            days_limit = self.limit_spinbox.value()
+            time_limit = datetime.now() - timedelta(days=days_limit)
+            logger.info(f"Giới hạn crawl comment {days_limit} ngày gần đây")
+        
         for i, comic in enumerate(comics_batch):
             try:
                 comic_id = comic.get("id")
@@ -800,7 +823,7 @@ class DetailAnalysisTab(QWidget):
                 
                 # Crawl và xử lý comments
                 start_time = time.time()
-                comments = crawler.crawl_comments(comic)
+                comments = crawler.crawl_comments(comic, time_limit=time_limit, days_limit=days_limit)
                 crawl_time = time.time() - start_time
                 
                 logger.info(f"Đã crawl được {len(comments)} comment trong {crawl_time:.2f} giây")
@@ -1012,11 +1035,10 @@ class DetailAnalysisTab(QWidget):
             comprehensive_rating_item.setData(Qt.ItemDataRole.DisplayRole, float(result.get("comprehensive_rating", 0)))
             self.result_table.setItem(row, 10, comprehensive_rating_item)
             
-            # Highlight top 3
-            if i < 3:
+            if i % 2 == 1:  
                 for col in range(11):
                     item = self.result_table.item(row, col)
-                    item.setBackground(Qt.GlobalColor.yellow)
+                    item.setBackground(QColor(240, 240, 240)) 
         
         self.load_history_data()
         # Bật lại tính năng sắp xếp

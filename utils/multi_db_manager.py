@@ -168,7 +168,7 @@ class MultipleDBManager:
             return False
         
         self.current_source = source
-        logger.info(f"Đã thiết lập nguồn dữ liệu: {source}")
+        # logger.info(f"Đã thiết lập nguồn dữ liệu: {source}")
         return True
     
     def save_base_rating(self, comic_id, base_rating):

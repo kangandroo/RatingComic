@@ -3,6 +3,7 @@ import random
 import logging
 import os
 import re
+from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -537,12 +538,12 @@ class NetTruyenCrawler(BaseCrawler):
             "nguon": "NetTruyen",
         }
     
-    def crawl_comments(self, comic):
-        """Crawl comment cho một truyện cụ thể - trong thread phân tích"""
+    def crawl_comments(self, comic, time_limit=None, days_limit=None):
+        """Crawl comment cho một truyện cụ thể với giới hạn thời gian"""
         driver = self.setup_driver()
         comments = []
         unique_contents = set()
-        duplicate_found = False
+        old_comments_count = 0
         
         try:
             # Lấy link từ comic
@@ -552,117 +553,183 @@ class NetTruyenCrawler(BaseCrawler):
                 driver.quit()
                 return []
             
-            # logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
+            # Log thông tin về giới hạn thời gian
+            if time_limit:
+                logger.info(f"Crawl comment cho truyện: {comic.get('ten_truyen')} từ {days_limit} ngày gần đây ({time_limit.strftime('%Y-%m-%d')})")
+            else:
+                logger.info(f"Crawl tất cả comment cho truyện: {comic.get('ten_truyen')}")
             
+            # Truy cập trang và chuyển đến phần comment
             driver.get(link)
             time.sleep(random.uniform(2, 3))
-
-            # Gọi hàm joinComment() để chuyển đến phần comment
             try:
                 driver.execute_script("joinComment()")
                 time.sleep(random.uniform(2, 3))
-            except Exception:
+            except:
                 logger.warning("Không thể gọi hàm joinComment")
                 
             page_comment = 1
-            max_comment_pages = 1000  
-            while page_comment <= max_comment_pages:
+            max_comment_pages = 100
+            stop_crawling = False
+            
+            while page_comment <= max_comment_pages and not stop_crawling:
                 comments_in_current_page = 0
-
-                # Lấy danh sách bình luận với selector cụ thể
+                old_comments_in_page = 0
+                
                 try:
                     comment_elements = WebDriverWait(driver, 5).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".info"))
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".comment-list .item.clearfix .info")) 
                     )
                     
                     if not comment_elements:
-                        logger.info("Không tìm thấy comment trong trang")
                         break
                         
+                    total_comments_in_page = len(comment_elements)
+                    logger.info(f"Tìm thấy {total_comments_in_page} comment trên trang {page_comment}")
+                    
+                    # Xử lý từng comment
                     for comment in comment_elements:
-                        # Lấy tên người bình luận
                         try:
-                            name_elem = comment.find_element(By.CSS_SELECTOR, ".comment-header span.authorname.name-1")
-                            name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
-                        except:
-                            name = "Người dùng ẩn danh"
-                        
-                        # Lấy nội dung bình luận
-                        try:
-                            content_elem = comment.find_element(By.CSS_SELECTOR, ".info div.comment-content")
-                            content = content_elem.text.strip() if content_elem.text else "N/A"
-                        except:
-                            content = "N/A"
-                        
-                        # Kiểm tra xem nội dung bình luận đã tồn tại chưa
-                        if content != "N/A" and content in unique_contents:
-                            duplicate_found = True
-                            logger.info("Phát hiện comment trùng lặp, sẽ dừng crawl")
+                            # Lấy tên người bình luận
+                            try:
+                                name_elem = comment.find_element(By.CSS_SELECTOR, ".comment-header span.authorname.name-1")
+                                name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
+                            except:
+                                name = "Người dùng ẩn danh"
+                            
+                            # Lấy nội dung bình luận
+                            try:
+                                content_elem = comment.find_element(By.CSS_SELECTOR, ".info div.comment-content")
+                                content = content_elem.text.strip() if content_elem.text else "N/A"
+                            except:
+                                content = "N/A"
+                            
+                            time_text = ""
+                            try:
+                                abbr_elem = comment.find_element(By.CSS_SELECTOR, "ul.comment-footer .li .abbr")
+                                
+                                time_text = abbr_elem.get_attribute("title") or abbr_elem.text.strip()
+                                logger.info(f"Thời gian comment raw: '{time_text}'")
+                            except:
+                                logger.debug("Không tìm thấy thẻ abbr chứa thời gian")
+                            
+                            # Xử lý thời gian
+                            comment_time = datetime.now() 
+                            if time_text:
+                                comment_time = self.parse_relative_time(time_text)
+                            
+                            # Kiểm tra giới hạn thời gian
+                            if time_limit and comment_time < time_limit:
+                                logger.info(f"Comment quá cũ: '{time_text}' ({comment_time.strftime('%Y-%m-%d')} < {time_limit.strftime('%Y-%m-%d')})")
+                                old_comments_count += 1
+                                stop_crawling = True
+                                break
+                            
+                            # Kiểm tra trùng lặp
+                            if content != "N/A" and content in unique_contents:
+                                logger.info("Phát hiện comment trùng lặp, dừng crawl")
+                                stop_crawling = True
+                                break
+                            
+                            if content != "N/A":
+                                unique_contents.add(content)
+                            
+                            # Thêm comment vào danh sách kết quả
+                            comments.append({
+                                "ten_nguoi_binh_luan": name,
+                                "noi_dung": content,
+                                "comic_id": comic.get("id"),
+                                "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            
+                            comments_in_current_page += 1
+                            
+                        except Exception as e:
+                            logger.error(f"Lỗi khi xử lý comment: {e}")
+                            
+                        if stop_crawling:
                             break
-                        
-                        # Nếu nội dung khác N/A, thêm vào tập hợp để kiểm tra trùng lặp sau này
-                        if content != "N/A":
-                            unique_contents.add(content)
-                        
-                        # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
-                        comments.append({
-                            "ten_nguoi_binh_luan": name,
-                            "noi_dung": content,
-                            "comic_id": comic.get("id")
-                        })
-                        comments_in_current_page += 1
                     
-                    # Nếu phát hiện bình luận trùng lặp, dừng việc chuyển trang
-                    if duplicate_found:
-                        break
+                    # Thống kê kết quả trang hiện tại
+                    logger.info(f"Trang {page_comment}: {comments_in_current_page} comment mới, {old_comments_in_page} comment quá cũ")
                     
-                    # Thêm điều kiện dừng: Nếu số lượng bình luận trong trang < 10
-                    if comments_in_current_page < 10:
-                        logger.info(f"Số lượng comment trang {page_comment} < 10, dừng crawl")
+                    # Chuyển trang
+                    if stop_crawling:
+                        logger.info("Dừng crawl do comment quá cũ")
                         break
                         
+                    try:
+                        next_button = None
+                        for selector in ["//a[contains(text(), 'Sau')]", "//li[contains(@class, 'next')]/a"]:
+                            buttons = driver.find_elements(By.XPATH, selector)
+                            if buttons:
+                                next_button = buttons[0]
+                                break
+                                
+                        if next_button:
+                            driver.execute_script("arguments[0].click();", next_button)
+                            page_comment += 1
+                            logger.info(f"Chuyển sang trang comment {page_comment}")
+                            time.sleep(random.uniform(2, 3))
+                        else:
+                            logger.info("Không tìm thấy nút chuyển trang, kết thúc")
+                            break
+                    except:
+                        logger.info("Lỗi khi chuyển trang, kết thúc")
+                        break
+                    
                 except Exception as e:
                     logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
                     break
-
-                # Nếu phát hiện bình luận trùng lặp, không tiếp tục chuyển trang
-                if duplicate_found:
-                    break
-
-                # Tìm nút chuyển trang bình luận
-                try:
-                    # Thử nhiều cách để tìm nút "Sau" hoặc "Next"
-                    next_button_selectors = [
-                        "/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[6]/a",
-                        "//a[contains(text(), 'Sau')]",
-                        "//a[contains(text(), 'Next')]",
-                        "//li[contains(@class, 'next')]/a"
-                    ]
-                    
-                    next_button = None
-                    for selector in next_button_selectors:
-                        next_buttons = driver.find_elements(By.XPATH, selector)
-                        if next_buttons:
-                            next_button = next_buttons[0]
-                            break
-                            
-                    if next_button:
-                        driver.execute_script("arguments[0].click();", next_button)
-                        page_comment += 1
-                        logger.info(f"Chuyển sang trang comment {page_comment}")
-                        time.sleep(random.uniform(2, 3))
-                    else:
-                        logger.info("Không tìm thấy nút chuyển trang, kết thúc")
-                        break
-                except Exception as e:
-                    logger.error(f"Lỗi khi chuyển trang comment: {e}")
-                    break
-            
+                
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {e}")
         finally:
             if driver:
                 driver.quit()
             
-        logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
+
+        if time_limit:
+            logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')} (bỏ qua {old_comments_count} comment quá cũ)")
+        else:
+            logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
+        
         return comments
+    
+    def parse_relative_time(self, time_text):
+        """Chuyển đổi thời gian tương đối hoặc chính xác thành datetime"""
+        now = datetime.now()
+        time_text = time_text.lower().strip()
+        
+        try:
+            try:
+                return datetime.strptime(time_text, "%Y-%m-%d %H:%M:%S") 
+            except ValueError:
+                pass
+            
+            # Xử lý thời gian tương đối
+            digits = ''.join(filter(str.isdigit, time_text))
+            if not digits:  # "vừa xong", "vài giây trước"
+                return now
+                
+            number = int(digits)
+            
+            if "phút" in time_text:
+                return now - timedelta(minutes=number)
+            elif "giờ" in time_text:
+                return now - timedelta(hours=number)
+            elif "ngày" in time_text:
+                return now - timedelta(days=number)
+            elif "tuần" in time_text:
+                return now - timedelta(weeks=number)
+            elif "tháng" in time_text:
+                return now - timedelta(days=int(number * 30.44))
+            elif "năm" in time_text:
+                return now - timedelta(days=number * 365)
+            
+            return now
+            
+        except Exception as e:
+            logger.error(f"Lỗi phân tích thời gian '{time_text}': {e}")
+            return now

@@ -59,13 +59,13 @@ class NetTruyenRatingCalculator:
             norm_chapters = min(1.0, np.log10(chapter_count + 1) / np.log10(500)) if chapter_count > 0 else 0
             
             # 5. Tính điểm từ các thành phần
-            view_score = (norm_views_total * 1.0) + (norm_views_efficiency * 2.0)  # Tổng: 3 điểm
-            follower_score = (norm_followers_total * 0.5) + (norm_followers_efficiency * 2)  # Tổng: 2.5 điểm
-            chapter_score = norm_chapters * 0  # 0.5 điểm
+            view_score = (norm_views_total * 0.5) + (norm_views_efficiency * 1.5)  # Tổng: 2 điểm
+            follower_score = (norm_followers_total * 0.5) + (norm_followers_efficiency * 3)  # Tổng: 3.5 điểm
+            chapter_score = norm_chapters * 0  
             
             # Điểm đánh giá với trọng số từ số lượng đánh giá
-            rating_confidence = min(1.0, rating_count / 100) if rating_count > 0 else 0.1  # Độ tin cậy của rating
-            rating_score = (rating_value / 10.0) * 4.5 * rating_confidence  # Tổng: tối đa 4 điểm
+            rating_confidence = min(1.0, rating_count / (0.01 * max(1, followers))) if rating_count > 0 else 0.1  
+            rating_score = (rating_value / 10.0) * 4.5 * rating_confidence
             
             # 6. Điểm cơ bản: tổng các thành phần (tối đa 10 điểm)
             base_rating = view_score + follower_score + chapter_score + rating_score

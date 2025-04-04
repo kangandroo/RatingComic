@@ -4,6 +4,7 @@ import random
 import logging
 import re
 import os
+from datetime import datetime, timedelta
 import queue
 import threading
 from selenium import webdriver
@@ -550,7 +551,7 @@ class TruyenQQCrawler(BaseCrawler):
                 driver.quit()
         return result
     
-    def crawl_comments(self, comic):
+    def crawl_comments(self, comic, time_limit=None, days_limit=None):
         """Crawl comment cho một truyện cụ thể"""
         driver = None
         all_comments = []
@@ -578,7 +579,7 @@ class TruyenQQCrawler(BaseCrawler):
                     driver.quit()
                 return []
                         
-            time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
+            time.sleep(random.uniform(1, 2))  
             
             # Kiểm tra xem trang có tồn tại không
             if "Page not found" in driver.title or "404" in driver.title:
@@ -590,7 +591,8 @@ class TruyenQQCrawler(BaseCrawler):
             # Lặp qua các trang comment
             page_comment = 1
             max_pages = 100  
-            while page_comment <= max_pages:
+            stop_crawling = False
+            while page_comment <= max_pages and not stop_crawling:
                 try:
                     # Debug thông tin trang hiện tại
                     logger.info(f"Đang tải comment trang {page_comment}...")
@@ -608,7 +610,7 @@ class TruyenQQCrawler(BaseCrawler):
                         logger.error(f"Lỗi khi gọi hàm loadComment: {str(e)}")
                         break
                         
-                    time.sleep(random.uniform(2, 3))  # Tăng thời gian chờ
+                    time.sleep(random.uniform(2, 3))  
                     
                     # Kiểm tra xem có comment không
                     comment_elements = driver.find_elements(By.CSS_SELECTOR, "#comment_list .list-comment article.info-comment")
@@ -621,6 +623,7 @@ class TruyenQQCrawler(BaseCrawler):
                     
                     # Xử lý từng comment
                     new_comments_found = 0
+                    old_comments_count = 0
                     for comment_elem in comment_elements:
                         try:
                             # Thử dùng JavaScript để lấy thông tin
@@ -632,6 +635,10 @@ class TruyenQQCrawler(BaseCrawler):
                                 return arguments[0].querySelector('div.outsite-comment div.outline-content-comment div.content-comment')?.innerText || "N/A";
                             """, comment_elem)
                             
+                            time_text = driver.execute_script("""
+                                return arguments[0].querySelector('div.action-comment span.time')?.innerText || "N/A";
+                            """, comment_elem)
+
                             # Đảm bảo nội dung bình luận không để trống
                             if not content or content.strip() == "":
                                 content = "N/A"
@@ -639,12 +646,23 @@ class TruyenQQCrawler(BaseCrawler):
                             # Đảm bảo tên người bình luận không để trống
                             if not name or name.strip() == "":
                                 name = "N/A"
+                                
+                            comment_time = datetime.now()  # Mặc định là thời gian hiện tại
+                            if time_text:
+                                comment_time = self.parse_relative_time(time_text)
+                            
+                            if time_limit and comment_time < time_limit:
+                                logger.debug(f"Comment quá cũ ({time_text}), bỏ qua")
+                                old_comments_count += 1
+                                continue
                             
                             # Tạo đối tượng comment
                             comment_data = {
                                 "ten_nguoi_binh_luan": name,
                                 "noi_dung": content,
-                                "comic_id": comic_id
+                                "comic_id": comic_id,
+                                "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             }
                             
                             # Kiểm tra trùng lặp trước khi thêm
@@ -663,6 +681,11 @@ class TruyenQQCrawler(BaseCrawler):
                             logger.error(f"Lỗi khi xử lý comment: {str(e)}")
                     
                     logger.info(f"Đã thêm {new_comments_found} comment mới từ trang {page_comment}")
+                    
+                    if time_limit and old_comments_count > 0 and old_comments_count == len(comment_elements):
+                        logger.info(f"Tất cả {len(comment_elements)} comment trên trang {page_comment} đều cũ hơn {days_limit} ngày, dừng crawl")
+                        stop_crawling = True
+                        break                    
                     
                     # Nếu không có comment mới nào được thêm, dừng lại
                     if new_comments_found == 0:
@@ -690,6 +713,47 @@ class TruyenQQCrawler(BaseCrawler):
                 driver.quit()
         return all_comments
     
+    def parse_relative_time(self, time_text):
+        """
+        Chuyển đổi thời gian tương đối (vd: "14 ngày trước") thành đối tượng datetime
+        """
+        now = datetime.now()
+        time_text = time_text.lower().strip()
+        
+        try:
+            if "vừa xong" in time_text or "giây trước" in time_text:
+                return now
+                
+            if "phút trước" in time_text:
+                minutes = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(minutes=minutes)
+                
+            if "giờ trước" in time_text:
+                hours = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(hours=hours)
+                
+            if "ngày trước" in time_text:
+                days = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(days=days)
+                
+            if "tuần trước" in time_text:
+                weeks = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(weeks=weeks)
+                
+            if "tháng trước" in time_text:
+                months = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(days=31*months)
+                
+            if "năm trước" in time_text:
+                years = int(''.join(filter(str.isdigit, time_text)))
+                return now - timedelta(days=365*years)
+                
+            return now
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi phân tích thời gian '{time_text}': {str(e)}")
+            return now    
+
     def extract_number(self, text_value):
         """
         Trích xuất số từ chuỗi với nhiều định dạng

@@ -2,6 +2,7 @@ from crawlers.base_crawler import BaseCrawler
 import time
 import random
 import logging
+from datetime import datetime, timedelta
 import re
 import os
 import queue
@@ -412,15 +413,14 @@ class ManhuavnCrawler(BaseCrawler):
             "nguon": "Manhuavn"
         }
     
-    def crawl_comments(self, comic):
-        """Crawl comment cho một truyện cụ thể"""
+    def crawl_comments(self, comic, time_limit=None, days_limit=None):
         driver = self.setup_driver()
         comments = []
+        old_comments_count = 0
         
         try:
             # Lấy link từ comic
             link = comic.get("link_truyen")
-            # logger.info(f"Link truyện: {link}")
             comic_id = comic.get("id")
             
             if not link or not comic_id:
@@ -428,7 +428,10 @@ class ManhuavnCrawler(BaseCrawler):
                 driver.quit()
                 return []
             
-            logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')}")
+            if time_limit:
+                logger.info(f"Crawl comment cho truyện: {comic.get('ten_truyen')} từ {days_limit} ngày gần đây ({time_limit.strftime('%Y-%m-%d')})")
+            else:
+                logger.info(f"Crawl tất cả comment cho truyện: {comic.get('ten_truyen')}")
             
             try:
                 driver.get(link)
@@ -438,41 +441,87 @@ class ManhuavnCrawler(BaseCrawler):
                 return []
             
             time.sleep(random.uniform(2, 3))
-
-            # Mở tất cả bình luận
-            while True:
+            load_more_attempts = 0
+            stop_loading = False
+            max_load_attempts = 20  
+            
+            while load_more_attempts < max_load_attempts and not stop_loading:
                 try:
+                    if time_limit:
+                        current_comments = driver.find_elements(By.CSS_SELECTOR, ".comment_item")
+                        
+                        # Kiểm tra comment cuối cùng 
+                        if current_comments:
+                            last_comment = current_comments[-1]
+                            try:
+                                time_span = last_comment.find_element(By.CSS_SELECTOR, "div.comment-head > span.time")
+                                time_text = time_span.get_attribute("datetime") or time_span.text.strip()
+                                
+                                if time_text:
+                                    comment_time = self.parse_relative_time(time_text)
+                                    
+                                    # Kiểm tra nếu comment cuối cùng đã quá cũ
+                                    if comment_time < time_limit:
+                                        logger.info(f"Dừng tải thêm comment: Đã phát hiện comment quá cũ ({time_text})")
+                                        stop_loading = True
+                                        break
+                            except Exception as te:
+                                logger.debug(f"Không thể lấy thời gian của comment cuối: {str(te)}")
+                    
+                    # Tìm và nhấp nút tải thêm comment
                     load_more_button = driver.find_element(By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div[4]/div[2]/div[1]/div[4]/ul/div/button")
                     load_more_button.click()
-                    # logger.info("Đang tải thêm bình luận...")
+                    load_more_attempts += 1
                     time.sleep(2)
-                except:
+                except Exception as e:
+                    # Không tìm thấy nút hoặc lỗi khác - có thể đã tải hết comment
+                    logger.debug(f"Không thể tải thêm comment: {str(e)}")
                     break
 
-            # Lấy danh sách bình luận
+            # Lấy danh sách tất cả các comment đã tải
             comment_elements = driver.find_elements(By.CSS_SELECTOR, ".comment_item")
             logger.info(f"Đã tìm thấy {len(comment_elements)} comment")
             
+            # Xử lý từng comment
             for comment_elem in comment_elements:
-                user = self.get_text_safe(comment_elem, ".comment-head")
-                content = self.get_text_safe(comment_elem, ".comment-content")
-                
-                # Đảm bảo nội dung bình luận không để trống
-                if not content or content.strip() == "":
-                    content = "N/A"
+                try:
+                    user = self.get_text_safe(comment_elem, ".comment-head")
+                    content = self.get_text_safe(comment_elem, ".comment-content")
                     
-                # Đảm bảo tên người bình luận không để trống
-                if not user or user.strip() == "":
-                    user = "Người dùng ẩn danh"
-                
-                # Thêm comment vào danh sách kết quả - chuyển đổi tên trường
-                comments.append({
-                    "ten_nguoi_binh_luan": user,
-                    "noi_dung": content,
-                    "comic_id": comic_id
-                })
+                    time_text = ""
+                    try:
+                        time_span = comment_elem.find_element(By.CSS_SELECTOR, "div.comment-head > span.time")
+                        time_text = time_span.get_attribute("datetime") or time_span.text.strip()
+                    except:
+                        pass
+                    
+                    comment_time = datetime.now()
+                    if time_text:
+                        comment_time = self.parse_relative_time(time_text)
+                    
+                    if time_limit and comment_time < time_limit:
+                        logger.debug(f"Bỏ qua comment quá cũ: {time_text} ({comment_time.strftime('%Y-%m-%d')} < {time_limit.strftime('%Y-%m-%d')})")
+                        old_comments_count += 1
+                        continue
+                    
+                    if not content or content.strip() == "":
+                        content = "N/A"
+                        
+                    if not user or user.strip() == "":
+                        user = "Người dùng ẩn danh"
+                    
+                    comments.append({
+                        "ten_nguoi_binh_luan": user,
+                        "noi_dung": content,
+                        "comic_id": comic_id,
+                        "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Lỗi khi xử lý comment: {e}")
             
-            # Lưu comments vào database sử dụng SQLiteHelper
+            # Lưu comments vào database
             if comments:
                 logger.info(f"Lưu {len(comments)} comment cho truyện ID {comic_id}")
                 self.sqlite_helper.save_comments_to_db(comic_id, comments, "Manhuavn")
@@ -480,11 +529,91 @@ class ManhuavnCrawler(BaseCrawler):
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {e}")
         finally:
-            driver.quit()
-            
-        logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
+            if driver:
+                driver.quit()
+        
+        if time_limit:
+            logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')} (bỏ qua {old_comments_count} comment quá cũ)")
+        else:
+            logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')}")
+        
         return comments
     
+    def parse_relative_time(self, time_text):
+        if not time_text or not time_text.strip():
+            return datetime.now()
+            
+        time_text = time_text.strip().lower()
+        logger.debug(f"Đang phân tích chuỗi thời gian: '{time_text}'")
+        
+        try:
+            if " - " in time_text and "/" in time_text:
+                time_parts = time_text.split(" - ")
+                if len(time_parts) == 2:
+                    time_part = time_parts[0].strip()  
+                    date_part = time_parts[1].strip()  
+                    
+                    # Tách ngày thành các thành phần
+                    date_components = date_part.split("/")
+                    if len(date_components) == 3:
+                        day = date_components[0]
+                        month = date_components[1]
+                        year = date_components[2]
+                        
+                        # Chuyển đổi sang định dạng ISO
+                        formatted_time = f"{year}-{month}-{day} {time_part}:00"
+                        return datetime.strptime(formatted_time, "%Y-%m-%d %H:%M:%S")
+            
+            now = datetime.now()
+            
+            if "vừa xong" in time_text or "giây trước" in time_text:
+                return now
+            
+            digits = ''.join(filter(str.isdigit, time_text))
+            if not digits:
+                return now  
+            
+            number = int(digits)
+            
+            if "phút trước" in time_text:
+                return now - timedelta(minutes=number)
+                
+            if "giờ trước" in time_text:
+                return now - timedelta(hours=number)
+                
+            if "ngày trước" in time_text:
+                return now - timedelta(days=number)
+                
+            if "tuần trước" in time_text:
+                return now - timedelta(weeks=number)
+                
+            if "tháng trước" in time_text:
+                return now - timedelta(days=int(number * 30.44))
+                
+            if "năm trước" in time_text:
+                return now - timedelta(days=number * 365)
+                
+            date_formats = [
+                "%Y-%m-%d %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y %H:%M",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+                "%d/%m/%Y"
+            ]
+            
+            for format_str in date_formats:
+                try:
+                    return datetime.strptime(time_text, format_str)
+                except ValueError:
+                    continue
+                    
+            return now
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi phân tích thời gian '{time_text}': {e}")
+            return datetime.now()
+        
     def extract_number(self, text_value):
         """Trích xuất số từ các chuỗi với nhiều định dạng"""
         if not text_value or text_value == "N/A":

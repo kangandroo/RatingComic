@@ -84,21 +84,21 @@ class ManhuavnRatingCalculator(BaseRatingCalculator):
             norm_followers_efficiency = min(1.0, np.log10(followers_per_chapter + 1) / np.log10(100)) if followers_per_chapter > 0 else 0
             
             # 3. Chuẩn hóa chỉ số tổng (thang 0-1)
-            norm_views_total = min(1.0, np.log10(views + 1) / np.log10(100000)) if views > 0 else 0
-            norm_followers_total = min(1.0, np.log10(followers + 1) / np.log10(20000)) if followers > 0 else 0
+            norm_views_total = min(1.0, np.log10(views + 1) / np.log10(500000)) if views > 0 else 0
+            norm_followers_total = min(1.0, np.log10(followers + 1) / np.log10(30000)) if followers > 0 else 0
             norm_rating_count = min(1.0, np.log10(rating_count + 1) / np.log10(1000)) if rating_count > 0 else 0
             
             # 4. Chuẩn hóa số chương - giảm ảnh hưởng bằng logarit
             norm_chapters = min(1.0, np.log10(chapter_count + 1) / np.log10(500)) if chapter_count > 0 else 0
             
             # 5. Tính điểm từ các thành phần
-            view_score = (norm_views_total * 1.0) + (norm_views_efficiency * 2.5)  # Tổng: 3.5 điểm
-            follower_score = (norm_followers_total * 0.5) + (norm_followers_efficiency * 2)  # Tổng: 2.5 điểm
-            chapter_score = norm_chapters * 0  # 0 điểm (đã điều chỉnh theo công thức yêu cầu)
+            view_score = (norm_views_total * 1.0) + (norm_views_efficiency * 1.5)  
+            follower_score = (norm_followers_total * 0.5) + (norm_followers_efficiency * 3)  
+            chapter_score = norm_chapters * 0  
             
             # Điểm đánh giá với trọng số từ số lượng đánh giá
-            rating_confidence = min(1.0, rating_count / 10) if rating_count > 0 else 0.1  # Độ tin cậy của rating
-            rating_score = (rating_value / 10.0) * 5 * rating_confidence  # Tổng: tối đa 4 điểm
+            rating_confidence = min(1.0, rating_count / (0.01 * max(1,followers))) if rating_count > 0 else 0.1  
+            rating_score = (rating_value / 10.0) * 4 * rating_confidence 
             
             # 6. Điểm cơ bản: thành phần định lượng
             base_rating = view_score + follower_score + chapter_score + rating_score
