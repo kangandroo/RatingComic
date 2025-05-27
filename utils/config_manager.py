@@ -38,8 +38,8 @@ class ConfigManager:
             "max_pages": 10,  # Số trang tối đa để crawl
             "worker_count": 5,  # Số worker cho multi-threading
             "supported_websites": {
-                "TruyenQQ": "https://truyenqqto.com",
-                "NetTruyen": "https://nettruyenvie.com",
+                "TruyenQQ": "https://truyenqqgo.com",
+                "NetTruyen": "https://nettruyenvio.com",
                 "Manhuavn": "https://manhuavn.top"
             },
             "database_folder": "database",

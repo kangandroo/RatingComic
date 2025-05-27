@@ -4,17 +4,14 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from seleniumbase import Driver
 import concurrent.futures
 import queue
 import threading
 from utils.sqlite_helper import SQLiteHelper
-
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 from crawlers.base_crawler import BaseCrawler
 
 logger = logging.getLogger(__name__)
@@ -77,9 +74,9 @@ class DriverPool:
                 break
 
 class NetTruyenCrawler(BaseCrawler):
-    """Crawler cho website NetTruyen"""
+    """Crawler cho website NetTruyen sử dụng SeleniumBase để bypass Cloudflare"""
     
-    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvie.com", max_pages=None, worker_count=5):
+    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvio.com", max_pages=None, worker_count=5):
         super().__init__(db_manager, config_manager)
         self.base_url = base_url
         self.max_pages = max_pages
@@ -97,124 +94,35 @@ class NetTruyenCrawler(BaseCrawler):
         self.thread_local = threading.local()
 
     def setup_driver(self):
-        """Tạo và cấu hình Chrome WebDriver với các tùy chọn vô hiệu hóa TensorFlow và GPU"""
-        chrome_options = Options()
-        
-        # Cấu hình cơ bản
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
-        
-        # === VÔ HIỆU HÓA TENSORFLOW & ML ===
-        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees,AcceleratedSmallCanvases,CanvasHitRegions,CanvasImageSmoothing")
-        chrome_options.add_argument("--disable-machine-learning")
-        chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
-        
-        # Vô hiệu hóa TensorFlow Lite và các tính năng ML
-        chrome_options.add_argument("--disable-features=TensorFlowLite,TensorFlowLiteServerSide,TensorFlowLiteEngine,TensorFlowLiteEmbedded,TensorFlowLiteGPU")
-        chrome_options.add_argument("--disable-features=NeuralNetworkTensorflowEstimator,NeuralNetworkModelLoader")
-        chrome_options.add_argument("--disable-features=OptimizationHints,DocumentInFlightNetworkHints")
-        
-        # === VÔ HIỆU HÓA GPU & HARDWARE ACCELERATION ===
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-webgl")
-        chrome_options.add_argument("--disable-webgl2")
-        chrome_options.add_argument("--disable-accelerated-2d-canvas")
-        chrome_options.add_argument("--disable-3d-apis")
-        chrome_options.add_argument("--disable-software-rasterizer")
-        chrome_options.add_argument("--use-gl=swiftshader")
-        chrome_options.add_argument("--use-angle=swiftshader")
-        
-        # Vô hiệu hóa các tính năng đồ họa nâng cao
-        chrome_options.add_argument("--disable-canvas-aa")
-        chrome_options.add_argument("--disable-2d-canvas-clip-aa")
-        chrome_options.add_argument("--disable-gl-drawing-for-tests")
-        chrome_options.add_argument("--force-color-profile=srgb")
-        
-        # === TỐI ƯU CHO ĐA LUỒNG ===
-        chrome_options.add_argument("--single-process")  # Quan trọng cho đa luồng
-        chrome_options.add_argument("--memory-model=low")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--window-size=1280,1024")
-        chrome_options.add_argument("--disable-notifications")
-        
-        # Tắt các tính năng tiêu tốn tài nguyên
-        chrome_options.add_argument("--disable-remote-fonts")
-        chrome_options.add_argument("--disable-features=LazyFrameLoading,BlinkRuntimeCallStats")
-        chrome_options.add_argument("--disable-default-apps")
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-        chrome_options.add_argument("--disable-renderer-backgrounding")
-        chrome_options.add_argument("--disable-background-timer-throttling")
-        chrome_options.add_argument("--disable-background-networking")
-        
-        # Tắt TensorFlow logging hoàn toàn
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-        os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-        os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
-        os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
-        
-        prefs = {
-            # Tắt tải hình ảnh
-            'profile.default_content_settings.images': 2,
-            'profile.managed_default_content_settings.images': 2,
-            
-            'profile.default_content_settings.cookies': 2,
-            'profile.managed_default_content_settings.cookies': 2,
-            
-            'plugins.plugins_disabled': ['Chrome PDF Viewer'],
-            
-            'profile.default_content_settings.storage': 2,
-            'profile.managed_default_content_settings.storage': 2,
-            
-            'profile.default_content_settings.notifications': 2,
-            'profile.default_content_settings.geolocation': 2,
-            
-            'webgl.disabled': True,
-            'hardware_acceleration_mode.enabled': False,
-            
-            'profile.hardware_acceleration_enabled': False,
-        }
-        chrome_options.add_experimental_option('prefs', prefs)
-        
-        # Tắt logging và automation flags
-        chrome_options.add_experimental_option('excludeSwitches', ["enable-automation", "enable-logging"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
+        """Tạo và cấu hình SeleniumBase Driver để bypass Cloudflare"""
         try:
-            # Lấy đường dẫn đến ChromeDriver
-            chromedriver_path = self.config_manager.get_chrome_driver_path()
+            # Thiết lập SeleniumBase Driver với chế độ undetected (uc=True)
+            driver = Driver(uc=True, headless=False)
             
-            if chromedriver_path and os.path.exists(chromedriver_path):
-                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
-                service = Service(chromedriver_path)
-                service.log_path = os.devnull  # Vô hiệu hóa Selenium log
-                return webdriver.Chrome(service=service, options=chrome_options)
-            else:
-                service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
-                return webdriver.Chrome(options=chrome_options, service=service)
-                
+            # Cấu hình thêm
+            driver.implicitly_wait(10)
+            
+            # Tắt tải hình ảnh
+            driver.execute_cdp_cmd('Network.setBlockedURLs', {"urls": ["*.jpg", "*.jpeg", "*.png", "*.gif", "*.css", "*.woff", "*.svg"]})
+            driver.execute_cdp_cmd('Network.enable', {})
+            
+            # Thiết lập User-Agent
+            driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": self.headers['User-Agent']})
+            
+            return driver
         except Exception as e:
-            logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
+            logger.error(f"Lỗi khi khởi tạo SeleniumBase driver: {e}")
             try:
                 # Fallback mode - thử một lần nữa với ít tùy chọn hơn
-                fallback_options = Options()
-                fallback_options.add_argument("--headless")
-                fallback_options.add_argument("--no-sandbox")
-                fallback_options.add_argument("--disable-gpu")
-                fallback_options.add_argument("--disable-dev-shm-usage")
-                return webdriver.Chrome(options=fallback_options)
+                return Driver(uc=False, headless=True)
             except Exception as e2:
-                logger.critical(f"Lỗi nghiêm trọng khi khởi tạo Chrome driver: {e2}")
-                raise RuntimeError(f"Không thể khởi tạo Chrome driver: {e2}")
+                logger.critical(f"Lỗi nghiêm trọng khi khởi tạo SeleniumBase driver: {e2}")
+                raise RuntimeError(f"Không thể khởi tạo SeleniumBase driver: {e2}")
     
-    def get_text_safe(self, element, selector):
+    def get_text_safe(self, driver, selector):
         """Lấy text an toàn từ phần tử"""
         try:
-            return element.find_element(By.CSS_SELECTOR, selector).text.strip()
+            return driver.find_element("css selector", selector).text.strip()
         except Exception:
             return "N/A"
     
@@ -395,6 +303,9 @@ class NetTruyenCrawler(BaseCrawler):
         page = 1
         
         try:
+            # Bypass Cloudflare trước tiên
+            self.bypass_cloudflare(driver)
+            
             while max_pages is None or page <= max_pages:
                 url = f"{self.base_url}/?page={page}"
                 logger.info(f"Đang tải trang {page}: {url}")
@@ -402,15 +313,14 @@ class NetTruyenCrawler(BaseCrawler):
                 time.sleep(random.uniform(2, 4))
 
                 try:
-                    WebDriverWait(driver, 10).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".items .row .item"))
-                    )
+                    # Wait for the stories to be loaded
+                    driver.wait_for_element_present(".items .row .item", timeout=10)
                 except Exception:
                     logger.info(f"Không tìm thấy phần tử truyện trên trang {page}, kết thúc")
                     break
 
                 # Lấy tất cả các item truyện
-                item_elements = driver.find_elements(By.CSS_SELECTOR, ".items .row .item")
+                item_elements = driver.find_elements("css selector", ".items .row .item")
                 
                 if not item_elements:
                     logger.info("Không tìm thấy truyện nào trên trang, kết thúc")
@@ -419,14 +329,14 @@ class NetTruyenCrawler(BaseCrawler):
                 for item in item_elements:
                     try:
                         # Lấy tiêu đề và link truyện
-                        title_element = item.find_element(By.CSS_SELECTOR, "figcaption h3 a")
+                        title_element = item.find_element("css selector", "figcaption h3 a")
                         title = title_element.text.strip() if title_element.text else "Không có tên"
                         link = title_element.get_attribute("href")
                         
                         # Lấy thông tin chương
                         chapter_info = "Chapter 0"  # Giá trị mặc định
                         try:
-                            chapter_info_elements = item.find_elements(By.CSS_SELECTOR, "figcaption ul li a")
+                            chapter_info_elements = item.find_elements("css selector", "figcaption ul li a")
                             if chapter_info_elements:
                                 chapter_info = chapter_info_elements[0].get_attribute("title") or "Chapter 0"
                         except Exception:
@@ -459,15 +369,40 @@ class NetTruyenCrawler(BaseCrawler):
         logger.info(f"Đã tìm thấy {len(stories)} truyện để crawl")
         return stories
     
+    def bypass_cloudflare(self, driver):
+        """Bypass Cloudflare protection"""
+        try:
+            url = f"{self.base_url}/?page={1}"
+            logger.info(f"Đang truy cập {url} để bypass Cloudflare...")
+            driver.get(url)
+            
+            # Đợi để Cloudflare hoàn tất kiểm tra
+            logger.info("Đợi để vượt qua Cloudflare...")
+            time.sleep(5)  # Thời gian đợi có thể điều chỉnh
+            
+            # Kiểm tra xem đã bypass thành công chưa
+            if "Just a moment" in driver.page_source or "Checking your browser" in driver.page_source:
+                logger.info("Đang chờ Cloudflare hoàn tất kiểm tra...")
+                time.sleep(10)
+                
+            # Kiểm tra lại
+            if "Just a moment" in driver.page_source or "Checking your browser" in driver.page_source:
+                logger.warning("Cloudflare vẫn đang kiểm tra, chờ thêm...")
+                time.sleep(15)
+                
+            logger.info("Đã vượt qua Cloudflare")
+            return True
+        except Exception as e:
+            logger.error(f"Lỗi khi bypass Cloudflare: {e}")
+            return False
+    
     def get_story_details(self, story, driver):
         """Lấy thông tin chi tiết của truyện sử dụng driver được cung cấp từ pool"""
         try:
             for attempt in range(5):
                 try:
                     driver.get(story["Link truyện"])
-                    WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "li.author.row p.col-xs-8"))
-                    )
+                    driver.wait_for_element_present("li.author.row p.col-xs-8", timeout=10)
                     break
                 except Exception as e:
                     logger.warning(f"Thử lần {attempt + 1}")
@@ -494,7 +429,7 @@ class NetTruyenCrawler(BaseCrawler):
             # Cố gắng lấy số chương chính xác
             try:
                 # Thử tìm chương mới nhất
-                chapter_element = driver.find_element(By.CSS_SELECTOR, ".list-chapter li:first-child a")
+                chapter_element = driver.find_element("css selector", ".list-chapter li:first-child a")
                 if chapter_element:
                     chapter_text = chapter_element.get_attribute("title")
                     if chapter_text:
@@ -504,7 +439,7 @@ class NetTruyenCrawler(BaseCrawler):
                     
                 # Nếu không tìm thấy số chương hoặc số chương = 0, thử đếm các chương
                 if story.get("Số chương", 0) == 0:
-                    chapter_items = driver.find_elements(By.CSS_SELECTOR, ".list-chapter li")
+                    chapter_items = driver.find_elements("css selector", ".list-chapter li")
                     story["Số chương"] = len(chapter_items)
             except Exception as e:
                 logger.error(f"Lỗi khi lấy số chương: {e}")
@@ -546,6 +481,9 @@ class NetTruyenCrawler(BaseCrawler):
         old_comments_count = 0
         
         try:
+            # Bypass Cloudflare trước tiên
+            self.bypass_cloudflare(driver)
+            
             # Lấy link từ comic
             link = comic.get("link_truyen")
             if not link:
@@ -577,9 +515,10 @@ class NetTruyenCrawler(BaseCrawler):
                 old_comments_in_page = 0
                 
                 try:
-                    comment_elements = WebDriverWait(driver, 5).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".comment-list .item.clearfix .info")) 
+                    WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, ".comment-list .item.clearfix .info"))
                     )
+                    comment_elements = driver.find_elements("css selector", ".comment-list .item.clearfix .info")
                     
                     if not comment_elements:
                         break
@@ -592,21 +531,21 @@ class NetTruyenCrawler(BaseCrawler):
                         try:
                             # Lấy tên người bình luận
                             try:
-                                name_elem = comment.find_element(By.CSS_SELECTOR, ".comment-header span.authorname.name-1")
+                                name_elem = comment.find_element("css selector", ".comment-header span.authorname.name-1")
                                 name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
                             except:
                                 name = "Người dùng ẩn danh"
                             
                             # Lấy nội dung bình luận
                             try:
-                                content_elem = comment.find_element(By.CSS_SELECTOR, ".info div.comment-content")
+                                content_elem = comment.find_element("css selector", ".info .comment-content")
                                 content = content_elem.text.strip() if content_elem.text else "N/A"
                             except:
                                 content = "N/A"
                             
                             time_text = ""
                             try:
-                                abbr_elem = comment.find_element(By.CSS_SELECTOR, "ul.comment-footer .li .abbr")
+                                abbr_elem = comment.find_element("css selector", "ul.comment-footer .li .abbr")
                                 
                                 time_text = abbr_elem.get_attribute("title") or abbr_elem.text.strip()
                                 logger.info(f"Thời gian comment raw: '{time_text}'")
@@ -661,22 +600,45 @@ class NetTruyenCrawler(BaseCrawler):
                         
                     try:
                         next_button = None
-                        for selector in ["//a[contains(text(), 'Sau')]", "//li[contains(@class, 'next')]/a"]:
-                            buttons = driver.find_elements(By.XPATH, selector)
+                        selector = ["/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[8]/a"]
+                        try:
+                            # Đợi tối đa 2 giây cho mỗi selector
+                            WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, selector)))
+                            buttons = driver.find_elements("xpath", selector)
                             if buttons:
                                 next_button = buttons[0]
+                                logger.info(f"Đã tìm thấy nút chuyển trang với selector: {selector}")
                                 break
+                        except Exception:
+                            continue
                                 
                         if next_button:
-                            driver.execute_script("arguments[0].click();", next_button)
+                            # Kiểm tra xem nút có thể nhấp được không
+                            is_clickable = WebDriverWait(driver, 3).until(
+                                EC.element_to_be_clickable((By.XPATH, "xpath_của_element"))
+                            )
+                            
+                            # Scroll đến nút trước khi nhấp
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
+                            time.sleep(0.5)  # Đợi sau khi scroll
+                            
+                            # Click bằng JavaScript và kiểm tra cả click thông thường
+                            try:
+                                driver.execute_script("arguments[0].click();", next_button)
+                            except Exception:
+                                try:
+                                    next_button.click()  # Thử click thông thường
+                                except Exception as e:
+                                    logger.warning(f"Không thể nhấp vào nút bằng cả hai phương pháp: {e}")
+                                    
                             page_comment += 1
                             logger.info(f"Chuyển sang trang comment {page_comment}")
                             time.sleep(random.uniform(2, 3))
                         else:
                             logger.info("Không tìm thấy nút chuyển trang, kết thúc")
                             break
-                    except:
-                        logger.info("Lỗi khi chuyển trang, kết thúc")
+                    except Exception as e:
+                        logger.info(f"Lỗi khi chuyển trang: {e}, kết thúc")
                         break
                     
                 except Exception as e:
@@ -689,7 +651,6 @@ class NetTruyenCrawler(BaseCrawler):
             if driver:
                 driver.quit()
             
-
         if time_limit:
             logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')} (bỏ qua {old_comments_count} comment quá cũ)")
         else:

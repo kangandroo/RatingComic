@@ -52,7 +52,7 @@ class CrawlerFactory:
             return TruyenQQCrawler(
                 db_manager,
                 config_manager,
-                base_url=kwargs.get('base_url', supported_websites.get('TruyenQQ', 'https://truyenqqto.com')),
+                base_url=kwargs.get('base_url', supported_websites.get('TruyenQQ', 'https://truyenqqgo.com')),
                 max_pages=kwargs.get('max_pages', config_manager.get('max_pages', 10)),
                 worker_count=kwargs.get('worker_count', config_manager.get('worker_count', 5))
             )
@@ -60,7 +60,7 @@ class CrawlerFactory:
             return NetTruyenCrawler(
                 db_manager,
                 config_manager,
-                base_url=kwargs.get('base_url', supported_websites.get('NetTruyen', 'https://nettruyenvie.com')),
+                base_url=kwargs.get('base_url', supported_websites.get('NetTruyen', 'https://nettruyenvio.com')),
                 max_pages=kwargs.get('max_pages', config_manager.get('max_pages', 10)),
                 worker_count=kwargs.get('worker_count', config_manager.get('worker_count', 5))
             )
