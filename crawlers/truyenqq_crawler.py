@@ -82,7 +82,7 @@ class TruyenQQCrawler(BaseCrawler):
         super().__init__(db_manager, config_manager)
         
         # Đặt base_url từ tham số hoặc giá trị mặc định
-        self.base_url = base_url if base_url else "https://truyenqqto.com"
+        self.base_url = base_url if base_url else "https://truyenqqgo.com"
         self.max_pages = max_pages
         self.worker_count = worker_count
         

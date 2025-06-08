@@ -121,8 +121,8 @@ class SettingsTab(QWidget):
         
         # URL websites
         websites = self.config_manager.get_supported_websites()
-        self.truyenqq_url_edit.setText(websites.get("TruyenQQ", "https://truyenqqto.com"))
-        self.nettruyen_url_edit.setText(websites.get("NetTruyen", "https://nettruyenvie.com"))
+        self.truyenqq_url_edit.setText(websites.get("TruyenQQ", "https://truyenqqgo.com"))
+        self.nettruyen_url_edit.setText(websites.get("NetTruyen", "https://nettruyenvio.com"))
         self.manhuavn_url_edit.setText(websites.get("Manhuavn", "https://manhuavn.top"))
         
         # Cài đặt sentiment
