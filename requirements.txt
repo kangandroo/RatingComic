@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Core dependencies
 PyQt6>=6.9.0
 numpy>=1.24.0
@@ -28,6 +29,8 @@ tqdm>=4.60.0
 pytest>=8.0.0
 behave>=1.2.6
 =======
+=======
+>>>>>>> refs/remotes/origin/main
 affine @ file:///home/conda/feedstock_root/build_artifacts/affine_1733762038348/work
 attrs @ file:///home/conda/feedstock_root/build_artifacts/attrs_1741918516150/work
 beautifulsoup4==4.13.4
@@ -152,4 +155,7 @@ win_inet_pton @ file:///D:/bld/win_inet_pton_1733130564612/work
 wsproto==1.2.0
 xyzservices @ file:///home/conda/feedstock_root/build_artifacts/xyzservices_1737234886776/work
 zstandard==0.23.0
+<<<<<<< HEAD
 >>>>>>> 97aa772a442a27878a9ef8e1e3eb7fa5d0411c47
+=======
+>>>>>>> refs/remotes/origin/main
