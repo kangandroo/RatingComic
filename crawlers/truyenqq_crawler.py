@@ -105,80 +105,27 @@ class TruyenQQCrawler(BaseCrawler):
         
         # Cấu hình cơ bản
         chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
-        
-        # === VÔ HIỆU HÓA TENSORFLOW & ML ===
-        chrome_options.add_argument("--disable-features=BlinkGenPropertyTrees,AcceleratedSmallCanvases,CanvasHitRegions,CanvasImageSmoothing")
-        chrome_options.add_argument("--disable-machine-learning")
-        chrome_options.add_argument("--disable-blink-features=NativeFileSystemAPI")
-        
-        # Vô hiệu hóa TensorFlow Lite và các tính năng ML
-        chrome_options.add_argument("--disable-features=TensorFlowLite,TensorFlowLiteServerSide,TensorFlowLiteEngine,TensorFlowLiteEmbedded,TensorFlowLiteGPU")
-        chrome_options.add_argument("--disable-features=NeuralNetworkTensorflowEstimator,NeuralNetworkModelLoader")
-        chrome_options.add_argument("--disable-features=OptimizationHints,DocumentInFlightNetworkHints")
-        
-        # === VÔ HIỆU HÓA GPU & HARDWARE ACCELERATION ===
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-webgl")
-        chrome_options.add_argument("--disable-webgl2")
         chrome_options.add_argument("--disable-accelerated-2d-canvas")
-        chrome_options.add_argument("--disable-3d-apis")
-        chrome_options.add_argument("--disable-software-rasterizer")
-        chrome_options.add_argument("--use-gl=swiftshader")
-        chrome_options.add_argument("--use-angle=swiftshader")
         
-        # Vô hiệu hóa các tính năng đồ họa nâng cao
-        chrome_options.add_argument("--disable-canvas-aa")
-        chrome_options.add_argument("--disable-2d-canvas-clip-aa")
-        chrome_options.add_argument("--disable-gl-drawing-for-tests")
-        chrome_options.add_argument("--force-color-profile=srgb")
-        
-        # === TỐI ƯU CHO ĐA LUỒNG ===
-        chrome_options.add_argument("--single-process")  # Quan trọng cho đa luồng
-        chrome_options.add_argument("--memory-model=low")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--window-size=1280,1024")
-        chrome_options.add_argument("--disable-notifications")
-        
-        # Tắt các tính năng tiêu tốn tài nguyên
-        chrome_options.add_argument("--disable-remote-fonts")
-        chrome_options.add_argument("--disable-features=LazyFrameLoading,BlinkRuntimeCallStats")
-        chrome_options.add_argument("--disable-default-apps")
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-        chrome_options.add_argument("--disable-renderer-backgrounding")
-        chrome_options.add_argument("--disable-background-timer-throttling")
-        chrome_options.add_argument("--disable-background-networking")
-        
-        # Tắt TensorFlow logging hoàn toàn
+        chrome_options.add_argument("--disable-usb")
+        chrome_options.add_argument("--disable-features=WebUSB,UsbChooserUI") 
+
+        # Vô hiệu hóa logging để tránh crash
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
         os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
-        os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
+        os.environ['TF_USE_LEGACY_CPU'] = '0'   # Thêm mới
+        os.environ['TF_DISABLE_MKL'] = '1'      # Thêm mới
         
         prefs = {
-            # Tắt tải hình ảnh
             'profile.default_content_settings.images': 2,
             'profile.managed_default_content_settings.images': 2,
-            
-            'profile.default_content_settings.cookies': 2,
-            'profile.managed_default_content_settings.cookies': 2,
-            
             'plugins.plugins_disabled': ['Chrome PDF Viewer'],
-            
-            'profile.default_content_settings.storage': 2,
-            'profile.managed_default_content_settings.storage': 2,
-            
-            'profile.default_content_settings.notifications': 2,
-            'profile.default_content_settings.geolocation': 2,
-            
-            'webgl.disabled': True,
             'hardware_acceleration_mode.enabled': False,
-            
             'profile.hardware_acceleration_enabled': False,
         }
         chrome_options.add_experimental_option('prefs', prefs)
@@ -188,22 +135,17 @@ class TruyenQQCrawler(BaseCrawler):
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
         try:
-            # Lấy đường dẫn đến ChromeDriver
-            chromedriver_path = self.config_manager.get_chrome_driver_path()
+            service = Service(log_path=os.devnull)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
             
-            if chromedriver_path and os.path.exists(chromedriver_path):
-                logger.info(f"Sử dụng ChromeDriver từ: {chromedriver_path}")
-                service = Service(chromedriver_path)
-                service.log_path = os.devnull  # Vô hiệu hóa Selenium log
-                return webdriver.Chrome(service=service, options=chrome_options)
-            else:
-                service = Service(log_path=os.devnull)  # Vô hiệu hóa Selenium log
-                return webdriver.Chrome(options=chrome_options, service=service)
-                
+            # Thêm timeout
+            driver.set_page_load_timeout(30)
+            driver.set_script_timeout(30)
+            return driver
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
             try:
-                # Fallback mode - thử một lần nữa với ít tùy chọn hơn
+                # Fallback với ít tùy chọn hơn
                 fallback_options = Options()
                 fallback_options.add_argument("--headless")
                 fallback_options.add_argument("--no-sandbox")
@@ -404,10 +346,9 @@ class TruyenQQCrawler(BaseCrawler):
                 finally:
                     # Trả driver lại pool
                     driver_pool.return_driver(driver)
-            
+
             # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
             for i in range(0, len(raw_comics), batch_size):
-                # Mỗi batch có một flag batch_stopping riêng
                 batch_stopping = threading.Event()
                 
                 batch = raw_comics[i:i+batch_size]

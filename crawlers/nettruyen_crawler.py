@@ -96,25 +96,32 @@ class NetTruyenCrawler(BaseCrawler):
     def setup_driver(self):
         """Tạo và cấu hình SeleniumBase Driver để bypass Cloudflare"""
         try:
-            # Thiết lập SeleniumBase Driver với chế độ undetected (uc=True)
-            driver = Driver(uc=True, headless=False)
+            # Thiết lập môi trường
+            os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+            os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+            os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
             
-            # Cấu hình thêm
-            driver.implicitly_wait(10)
+            # Trong SeleniumBase, tham số có tên khác
+            # Sử dụng minimal set của các tham số được hỗ trợ
+            from seleniumbase import Driver
             
-            # Tắt tải hình ảnh
-            driver.execute_cdp_cmd('Network.setBlockedURLs', {"urls": ["*.jpg", "*.jpeg", "*.png", "*.gif", "*.css", "*.woff", "*.svg"]})
-            driver.execute_cdp_cmd('Network.enable', {})
+            driver = Driver(
+                browser="chrome",   # Chỉ định trình duyệt
+                uc=True,            # Sử dụng undetected chromedriver
+                headless=True      # Chạy ở chế độ headless
+            )
             
-            # Thiết lập User-Agent
-            driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": self.headers['User-Agent']})
+            # Thiết lập các timeout sau khi tạo driver
+            driver.implicitly_wait(5)
+            driver.set_page_load_timeout(30)
             
             return driver
+            
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo SeleniumBase driver: {e}")
             try:
-                # Fallback mode - thử một lần nữa với ít tùy chọn hơn
-                return Driver(uc=False, headless=True)
+                # Fallback với ít tùy chọn hơn
+                return Driver(browser="chrome", headless=True)
             except Exception as e2:
                 logger.critical(f"Lỗi nghiêm trọng khi khởi tạo SeleniumBase driver: {e2}")
                 raise RuntimeError(f"Không thể khởi tạo SeleniumBase driver: {e2}")

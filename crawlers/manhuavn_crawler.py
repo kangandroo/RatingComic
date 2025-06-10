@@ -99,7 +99,7 @@ class ManhuavnCrawler(BaseCrawler):
         # logger.info(f"Khởi tạo ManhuavnCrawler với base_url={self.base_url}")
         
     def setup_driver(self):
-        """Cấu hình Chrome WebDriver tối ưu cho crawl đa luồng"""
+        """Cấu hình Chrome WebDriver tối ưu cho CPU AMD"""
         chrome_options = Options()
         
         # Chạy chế độ headless nếu không cần giao diện
@@ -109,23 +109,12 @@ class ManhuavnCrawler(BaseCrawler):
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--disable-features=NeuralNetworkTensorflowEstimator,OptimizationHints")
-        chrome_options.add_argument("--disable-accelerated-2d-canvas")
-        chrome_options.add_argument("--disable-background-networking")
-        chrome_options.add_argument("--disable-software-rasterizer")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-default-apps")
-        chrome_options.add_argument("--disable-renderer-backgrounding")
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-        chrome_options.add_argument("--disable-background-timer-throttling")
-        chrome_options.add_argument("--disable-backgrounding-features")
 
+        chrome_options.add_argument("--disable-usb") 
+        chrome_options.add_argument("--disable-features=WebUSB,UsbChooserUI")
+        
         # Giảm tài nguyên tiêu thụ
-        chrome_options.add_argument("--single-process")
         chrome_options.add_argument("--memory-model=low")
-        chrome_options.add_argument("--window-size=1280,1024")
         
         # Bỏ qua cảnh báo automation
         chrome_options.add_experimental_option('excludeSwitches', ["enable-automation"])
@@ -135,11 +124,18 @@ class ManhuavnCrawler(BaseCrawler):
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
         os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
         os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
+        os.environ['TF_USE_LEGACY_CPU'] = '0'   # Thêm mới
+        os.environ['TF_DISABLE_MKL'] = '1'      # Thêm mới
         os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
 
         try:
             service = Service(log_path=os.devnull)  # Tắt log của Selenium
-            return webdriver.Chrome(service=service, options=chrome_options)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Thêm timeout
+            driver.set_page_load_timeout(30)
+            driver.set_script_timeout(30)
+            return driver
         except Exception as e:
             raise RuntimeError(f"Lỗi khi khởi tạo Chrome driver: {e}")
     
@@ -232,7 +228,7 @@ class ManhuavnCrawler(BaseCrawler):
                 finally:
                     # Trả driver lại pool
                     driver_pool.return_driver(driver)
-            
+
             # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
             for i in range(0, len(raw_comics), batch_size):
                 batch_stopping = threading.Event()
