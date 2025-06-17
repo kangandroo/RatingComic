@@ -78,7 +78,8 @@ def setup_driver():
         driver = Driver(
             browser="chrome",   # Chỉ định trình duyệt
             uc=True,            # Sử dụng undetected chromedriver
-            headless=True      # Chạy ở chế độ headless
+            headless=True,      # Chạy ở chế độ headless
+            no_sandbox=True
         )
         
         # Thiết lập các timeout sau khi tạo driver

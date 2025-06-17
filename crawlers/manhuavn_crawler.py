@@ -359,7 +359,7 @@ def setup_driver():
     os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
 
     try:
-        service = Service(log_path=os.devnull)  # Tắt log của Selenium
+        service = Service(log_path=os.devnull)  
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         # Thêm timeout
