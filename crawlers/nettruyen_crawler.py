@@ -461,11 +461,11 @@ class NetTruyenCrawler(BaseCrawler):
         old_comments_count = 0
         
         try:
-            # Bypass Cloudflare trước tiên
-            bypass_cloudflare(driver, self.base_url)
+
             
             # Lấy link từ comic
             link = comic.get("link_truyen")
+            bypass_cloudflare(driver, link)
             if not link:
                 logger.error(f"Không tìm thấy link truyện cho: {comic.get('ten_truyen')}")
                 driver.quit()
@@ -484,152 +484,191 @@ class NetTruyenCrawler(BaseCrawler):
                 driver.execute_script("joinComment()")
                 time.sleep(random.uniform(2, 3))
             except:
-                logger.warning("Không thể gọi hàm joinComment")
-                
+                logger.warning("Không thể gọi hàm joinComment, trang có thể không có phần comment")
+                    
             page_comment = 1
-            max_comment_pages = 100
+            max_comment_pages = 100  
             stop_crawling = False
             
             while page_comment <= max_comment_pages and not stop_crawling:
                 comments_in_current_page = 0
                 old_comments_in_page = 0
                 
-                try:
-                    WebDriverWait(driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, ".comment-list .item.clearfix .info"))
-                    )
-                    comment_elements = driver.find_elements("css selector", ".comment-list .item.clearfix .info")
-                    
-                    if not comment_elements:
-                        break
-                        
-                    total_comments_in_page = len(comment_elements)
-                    logger.info(f"Tìm thấy {total_comments_in_page} comment trên trang {page_comment}")
-                    
-                    # Xử lý từng comment
-                    for comment in comment_elements:
-                        try:
-                            # Lấy tên người bình luận
-                            try:
-                                name_elem = comment.find_element("css selector", ".comment-header span.authorname.name-1")
-                                name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
-                            except:
-                                name = "Người dùng ẩn danh"
-                            
-                            # Lấy nội dung bình luận
-                            try:
-                                content_elem = comment.find_element("css selector", ".info .comment-content")
-                                content = content_elem.text.strip() if content_elem.text else "N/A"
-                            except:
-                                content = "N/A"
-                            
-                            time_text = ""
-                            try:
-                                abbr_elem = comment.find_element("css selector", "ul.comment-footer .li .abbr")
-                                
-                                time_text = abbr_elem.get_attribute("title") or abbr_elem.text.strip()
-                                logger.info(f"Thời gian comment raw: '{time_text}'")
-                            except:
-                                logger.debug("Không tìm thấy thẻ abbr chứa thời gian")
-                            
-                            # Xử lý thời gian
-                            comment_time = datetime.now() 
-                            if time_text:
-                                comment_time = parse_relative_time(time_text)
-                            
-                            # Kiểm tra giới hạn thời gian
-                            if time_limit and comment_time < time_limit:
-                                logger.info(f"Comment quá cũ: '{time_text}' ({comment_time.strftime('%Y-%m-%d')} < {time_limit.strftime('%Y-%m-%d')})")
-                                old_comments_count += 1
-                                stop_crawling = True
-                                break
-                            
-                            # Kiểm tra trùng lặp
-                            if content != "N/A" and content in unique_contents:
-                                logger.info("Phát hiện comment trùng lặp, dừng crawl")
-                                stop_crawling = True
-                                break
-                            
-                            if content != "N/A":
-                                unique_contents.add(content)
-                            
-                            # Thêm comment vào danh sách kết quả
-                            comments.append({
-                                "ten_nguoi_binh_luan": name,
-                                "noi_dung": content,
-                                "comic_id": comic.get("id"),
-                                "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            })
-                            
-                            comments_in_current_page += 1
-                            
-                        except Exception as e:
-                            logger.error(f"Lỗi khi xử lý comment: {e}")
-                            
-                        if stop_crawling:
-                            break
-                    
-                    # Thống kê kết quả trang hiện tại
-                    logger.info(f"Trang {page_comment}: {comments_in_current_page} comment mới, {old_comments_in_page} comment quá cũ")
-                    
-                    # Chuyển trang
-                    if stop_crawling:
-                        logger.info("Dừng crawl do comment quá cũ")
-                        break
-                        
+                # Lấy elements comments với retry
+                comment_elements = []
+                for retry in range(3):  # Thử tối đa 3 lần
                     try:
-                        next_button = None
-                        selector = ["/html/body/form/main/div[3]/div/div[1]/div/div/div[2]/div[6]/ul/li[8]/a"]
+                        WebDriverWait(driver, 5).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, ".comment-list"))
+                        )
+                        comment_elements = driver.find_elements("css selector", ".comment-list .item.clearfix .info")
+                        if comment_elements:
+                            break
+                        time.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"Thử lấy comments lần {retry+1}: {e}")
+                        time.sleep(1)
+                
+                if not comment_elements:
+                    logger.info(f"Không tìm thấy comment nào trên trang {page_comment}, dừng crawl")
+                    break
+                    
+                total_comments_in_page = len(comment_elements)
+                logger.info(f"Tìm thấy {total_comments_in_page} comment trên trang {page_comment}")
+                
+                # Xử lý từng comment
+                for comment in comment_elements:
+                    try:
+                        # Lấy tên người bình luận
                         try:
-                            # Đợi tối đa 2 giây cho mỗi selector
-                            WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, selector)))
-                            buttons = driver.find_elements("xpath", selector)
-                            if buttons:
-                                next_button = buttons[0]
+                            name_elem = comment.find_element("css selector", ".comment-header span.authorname")
+                            name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
+                        except:
+                            name = "Người dùng ẩn danh"
+                        
+                        # Lấy nội dung bình luận
+                        try:
+                            content_elem = comment.find_element("css selector", ".comment-content")
+                            content = content_elem.text.strip() if content_elem.text else "N/A"
+                        except:
+                            content = "N/A"
+                        
+                        time_text = ""
+                        try:
+                            # Thử nhiều selector cho thời gian comment
+                            selectors = [
+                                "ul.comment-footer .li .abbr",
+                                "ul.comment-footer li abbr",
+                                ".comment-header abbr"
+                            ]
+                            
+                            for selector in selectors:
+                                try:
+                                    abbr_elem = comment.find_element("css selector", selector)
+                                    time_text = abbr_elem.get_attribute("title") or abbr_elem.text.strip()
+                                    if time_text:
+                                        break
+                                except:
+                                    continue
+                                    
+                            if time_text:
+                                logger.info(f"Thời gian comment raw: '{time_text}'")
+                        except:
+                            logger.debug("Không tìm thấy thẻ chứa thời gian")
+                        
+                        # Xử lý thời gian
+                        comment_time = datetime.now() 
+                        if time_text:
+                            comment_time = self.parse_relative_time(time_text)
+                        
+                        # Kiểm tra giới hạn thời gian
+                        if time_limit and comment_time < time_limit:
+                            logger.info(f"Comment quá cũ: '{time_text}' ({comment_time.strftime('%Y-%m-%d')} < {time_limit.strftime('%Y-%m-%d')})")
+                            old_comments_count += 1
+                            stop_crawling = True
+                            break
+                        
+                        # Kiểm tra trùng lặp (chỉ với nội dung có ý nghĩa)
+                        if content != "N/A" and content in unique_contents:
+                            logger.info("Phát hiện comment trùng lặp, dừng crawl")
+                            stop_crawling = True
+                            break
+                        
+                        if content != "N/A" and len(content) > 5:
+                            unique_contents.add(content)
+                        
+                        # Thêm comment vào danh sách kết quả
+                        comments.append({
+                            "ten_nguoi_binh_luan": name,
+                            "noi_dung": content,
+                            "comic_id": comic.get("id"),
+                            "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        
+                        comments_in_current_page += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Lỗi khi xử lý comment: {e}")
+                
+                # Thống kê kết quả trang hiện tại
+                logger.info(f"Trang {page_comment}: {comments_in_current_page} comment mới, {old_comments_in_page} comment quá cũ")
+                
+                if stop_crawling:
+                    logger.info("Dừng crawl do nhiều comment quá cũ")
+                    break
+                
+                # Tìm nút Next bằng nhiều cách khác nhau
+                next_button = None
+                try:
+                    # Sử dụng nhiều selector có thể để tìm nút Next
+                    next_button_selectors = [
+                        # Class-based selectors (ưu tiên)
+                        "ul.pagination li.active + li a",
+                        "ul.pagination li a[title='Trang sau']",
+                        "a.next-page",
+                        # Text-based selectors
+                        "//a[contains(text(), 'Next')]",
+                        "//a[contains(text(), 'Tiếp')]",
+                        "//a[contains(text(), '>')]",
+                    ]
+                    
+                    for selector in next_button_selectors:
+                        try:
+                            if selector.startswith("//"):
+                                # XPath selector
+                                elements = driver.find_elements("xpath", selector)
+                            else:
+                                # CSS selector
+                                elements = driver.find_elements("css selector", selector)
+                                
+                            if elements:
+                                next_button = elements[0]
                                 logger.info(f"Đã tìm thấy nút chuyển trang với selector: {selector}")
                                 break
                         except Exception:
                             continue
-                                
-                        if next_button:
-                            # Kiểm tra xem nút có thể nhấp được không
-                            is_clickable = WebDriverWait(driver, 3).until(
-                                EC.element_to_be_clickable((By.XPATH, "xpath_của_element"))
-                            )
                             
-                            # Scroll đến nút trước khi nhấp
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
-                            time.sleep(0.5)  # Đợi sau khi scroll
-                            
-                            # Click bằng JavaScript và kiểm tra cả click thông thường
+                    if next_button:
+                        # Scroll đến nút trước khi nhấp
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
+                        time.sleep(1)  # Đợi sau khi scroll
+                        
+                        # Thử click an toàn
+                        try:
+                            # Ưu tiên JavaScript click vì an toàn hơn
+                            driver.execute_script("arguments[0].click();", next_button)
+                            logger.info(f"Đã click nút Next bằng JavaScript")
+                        except Exception as e1:
                             try:
-                                driver.execute_script("arguments[0].click();", next_button)
-                            except Exception:
+                                next_button.click()
+                                logger.info(f"Đã click nút Next thông thường")
+                            except Exception as e2:
+                                logger.warning(f"Không thể click nút Next: JS error: {e1}, regular error: {e2}")
+                                # Thử một cách khác: mở URL trực tiếp
                                 try:
-                                    next_button.click()  # Thử click thông thường
-                                except Exception as e:
-                                    logger.warning(f"Không thể nhấp vào nút bằng cả hai phương pháp: {e}")
-                                    
-                            page_comment += 1
-                            logger.info(f"Chuyển sang trang comment {page_comment}")
-                            time.sleep(random.uniform(2, 3))
-                        else:
-                            logger.info("Không tìm thấy nút chuyển trang, kết thúc")
-                            break
-                    except Exception as e:
-                        logger.info(f"Lỗi khi chuyển trang: {e}, kết thúc")
+                                    next_url = next_button.get_attribute("href")
+                                    if next_url:
+                                        driver.get(next_url)
+                                        logger.info(f"Đã chuyển trang bằng URL: {next_url}")
+                                    else:
+                                        logger.error("Không thể lấy URL từ nút Next")
+                                        break
+                                except:
+                                    # Không thể tiếp tục
+                                    logger.error("Không thể chuyển trang, dừng crawl")
+                                    break
+                        
+                        page_comment += 1
+                        logger.info(f"Chuyển sang trang comment {page_comment}")
+                        time.sleep(random.uniform(2, 3))
+                    else:
+                        logger.info("Không tìm thấy nút chuyển trang, kết thúc crawl")
                         break
-                    
                 except Exception as e:
-                    logger.error(f"Lỗi khi lấy comments trang {page_comment}: {e}")
+                    logger.error(f"Lỗi khi tìm/click nút chuyển trang: {e}")
                     break
-                
-            # Lưu comments vào database
-            if comments:
-                logger.info(f"Lưu {len(comments)} comment cho truyện ID {comic.get('id')}")
-                self.sqlite_helper.save_comments_to_db(comic.get('id'), comments, "NetTruyen")
-            
+
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {e}")
         finally:

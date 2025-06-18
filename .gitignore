@@ -9,6 +9,13 @@ __pycache__/
 *.lock
 *._icons
 
+.DS_Store
+
+# Bỏ qua file ảnh
+icon_disabled.png
+icon_enabled.png
+
+downloaded_files/
 
 # C extensions
 *.so

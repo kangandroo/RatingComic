@@ -1,9 +1,18 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import sys
 import logging
 import os
+import multiprocessing
+
+# Đơn giản hóa xử lý multiprocessing
+if hasattr(sys, 'frozen'):
+    # Chỉ dùng freeze_support, không sửa đổi Process class
+    multiprocessing.freeze_support()
+    
+    # Nếu trên Windows, đặt start method 
+    if sys.platform.startswith('win'):
+        if multiprocessing.get_start_method(allow_none=True) != 'spawn':
+            multiprocessing.set_start_method('spawn', force=True)
+
 from PyQt6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 from utils.config_manager import ConfigManager

@@ -36,7 +36,7 @@ class DetailAnalysisTab(QWidget):
         self.config_manager = config_manager
         self.selected_comics = []
         self.analysis_results = []
-        self.sentiment_analyzer = None  # Khởi tạo khi cần
+        self.sentiment_analyzer = None  
         self.is_analyzing = False
         
         # Thiết lập UI
@@ -65,8 +65,8 @@ class DetailAnalysisTab(QWidget):
         time_limit_layout.addWidget(QLabel("Giới hạn comment trong:"))
         
         self.limit_spinbox = QSpinBox() 
-        self.limit_spinbox.setRange(1, 30)
-        self.limit_spinbox.setValue(7) 
+        self.limit_spinbox.setRange(1, 60)
+        self.limit_spinbox.setValue(30) 
         self.limit_spinbox.setSuffix(" ngày gần nhất")
         time_limit_layout.addWidget(self.limit_spinbox)
         

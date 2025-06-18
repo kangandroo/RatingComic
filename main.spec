@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -14,12 +13,17 @@ a = Analysis(
         'winsdk',
         'PyQt6-Qt6',
         'PyQt6',
-        'selenium'
+        'selenium',
         'numpy',
         'urllib3',
         'torch',
         'torchvision',
-        'openpyxl'
+        'openpyxl',
+        'multiprocessing',
+        'multiprocessing.pool',
+        'multiprocessing.managers',
+        'multiprocessing.popen_spawn_win32', 
+        'concurrent.futures',
     ],
     hookspath=[],
     hooksconfig={},
