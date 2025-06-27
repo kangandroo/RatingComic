@@ -21,9 +21,12 @@ class ManhuavnRatingCalculator(BaseRatingCalculator):
         text_value = str(text_value).strip()
         try:
             # Xử lý hậu tố K và M
-            if 'K' in text_value.upper():
-                num_part = text_value.upper().replace('K', '')
+            if 'k' in text_value.upper():
+                num_part = text_value.upper().replace('k', '')
                 return int(float(num_part) * 1000)
+            elif 'm' in text_value.upper():
+                num_part = text_value.upper().replace('m', '')
+                return int(float(num_part) * 1000000)
             elif 'M' in text_value.upper():
                 num_part = text_value.upper().replace('M', '')
                 return int(float(num_part) * 1000000)

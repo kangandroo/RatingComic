@@ -97,49 +97,49 @@ class SentimentAnalyzer:
                         "sentiment": sentiment,
                         "score": result["score"]
                     }
-            else:
-                # Phương pháp đơn giản dựa trên từ khóa nếu không có mô hình
-                return self._simple_sentiment_analysis(text)
+            # else:
+            #     # Phương pháp đơn giản dựa trên từ khóa nếu không có mô hình
+            #     return self._simple_sentiment_analysis(text)
                 
         except Exception as e:
             logger.error(f"Lỗi khi phân tích sentiment: {str(e)}")
             return {"sentiment": "neutral", "score": 0.5}
     
-    def _simple_sentiment_analysis(self, text):
-        """
-        Phân tích tình cảm đơn giản dựa trên từ khóa (fallback)
+    # def _simple_sentiment_analysis(self, text):
+    #     """
+    #     Phân tích tình cảm đơn giản dựa trên từ khóa (fallback)
         
-        Args:
-            text: Văn bản cần phân tích
+    #     Args:
+    #         text: Văn bản cần phân tích
             
-        Returns:
-            dict: Kết quả phân tích (sentiment và score)
-        """
-        # Từ khóa tích cực
-        positive_words = [
-            "hay", "tốt", "thích", "tuyệt vời", "đỉnh", "tuyệt", "xuất sắc", "đẹp", 
-            "hay quá", "cực hay", "siêu phẩm", "nhất", "đáng đọc", "nên đọc", "tuyệt đỉnh",
-            "đáng xem", "nên xem", "yêu thích", "mê", "chất", "cảm động", "ấn tượng"
-        ]
+    #     Returns:
+    #         dict: Kết quả phân tích (sentiment và score)
+    #     """
+    #     # Từ khóa tích cực
+    #     positive_words = [
+    #         "hay", "tốt", "thích", "tuyệt vời", "đỉnh", "tuyệt", "xuất sắc", "đẹp", 
+    #         "hay quá", "cực hay", "siêu phẩm", "nhất", "đáng đọc", "nên đọc", "tuyệt đỉnh",
+    #         "đáng xem", "nên xem", "yêu thích", "mê", "chất", "cảm động", "ấn tượng"
+    #     ]
         
-        # Từ khóa tiêu cực
-        negative_words = [
-            "dở", "tệ", "chán", "không hay", "tầm thường", "không thích", "kém", "nhàm chán",
-            "thất vọng", "buồn ngủ", "vô lý", "nhảm", "rác", "phí thời gian", "lãng phí",
-            "vứt", "bỏ đi", "không nên đọc", "xàm", "trash", "nhạt", "kém hay"
-        ]
+    #     # Từ khóa tiêu cực
+    #     negative_words = [
+    #         "dở", "tệ", "chán", "không hay", "tầm thường", "không thích", "kém", "nhàm chán",
+    #         "thất vọng", "buồn ngủ", "vô lý", "nhảm", "rác", "phí thời gian", "lãng phí",
+    #         "vứt", "bỏ đi", "không nên đọc", "xàm", "trash", "nhạt", "kém hay"
+    #     ]
         
-        # Chuyển văn bản về chữ thường
-        text = text.lower()
+    #     # Chuyển văn bản về chữ thường
+    #     text = text.lower()
         
-        # Đếm từ khóa
-        positive_count = sum(1 for word in positive_words if word in text)
-        negative_count = sum(1 for word in negative_words if word in text)
+    #     # Đếm từ khóa
+    #     positive_count = sum(1 for word in positive_words if word in text)
+    #     negative_count = sum(1 for word in negative_words if word in text)
         
-        # Tính điểm
-        if positive_count > negative_count:
-            return {"sentiment": "positive", "score": min(0.9, 0.5 + 0.1 * positive_count)}
-        elif negative_count > positive_count:
-            return {"sentiment": "negative", "score": max(0, 0.5 - 0.1 * negative_count)}
-        else:
-            return {"sentiment": "neutral", "score": 0.5}
+    #     # Tính điểm
+    #     if positive_count > negative_count:
+    #         return {"sentiment": "positive", "score": min(0.9, 0.5 + 0.1 * positive_count)}
+    #     elif negative_count > positive_count:
+    #         return {"sentiment": "negative", "score": max(0, 0.5 - 0.1 * negative_count)}
+    #     else:
+    #         return {"sentiment": "neutral", "score": 0.5}

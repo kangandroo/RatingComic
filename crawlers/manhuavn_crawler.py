@@ -282,30 +282,31 @@ def get_text_safe(element, selector, default="N/A"):
         return default
 
 def parse_number(text):
-    """Chuyển đổi các số có đơn vị K, M thành số nguyên."""
-    if not text or text == "N/A":
+    """Chuyển đổi các số có đơn vị K, M và dấu phẩy thành số nguyên."""
+    if text is None:
         return 0
 
     try:
-        text = text.lower().strip()
+        text = str(text).lower().strip().replace(",", ".")  # Ép kiểu và xử lý
+
+        if text == "n/a":
+            return 0
+
+        multipliers = {"k": 1_000, "m": 1_000_000}
         multiplier = 1
 
-        if "k" in text:
-            multiplier = 1000
-            text = text.replace("k", "")
-        elif "m" in text:
-            multiplier = 1000000
-            text = text.replace("m", "")
+        for suffix, value in multipliers.items():
+            if suffix in text:
+                multiplier = value
+                text = text.replace(suffix, "")
+                break
 
-        # Loại bỏ các ký tự không phải số và dấu thập phân
         cleaned_text = re.sub(r'[^\d.]', '', text)
         if not cleaned_text:
             return 0
-            
+
         return int(float(cleaned_text) * multiplier)
-    except ValueError:
-        return 0
-    except Exception:
+    except (ValueError, TypeError):
         return 0
 
 def extract_number(text_value):
