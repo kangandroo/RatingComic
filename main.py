@@ -2,6 +2,8 @@ import sys
 import logging
 import os
 import multiprocessing
+import subprocess
+from pathlib import Path
 
 # Đơn giản hóa xử lý multiprocessing
 if hasattr(sys, 'frozen'):
@@ -42,8 +44,20 @@ def setup_logging():
     logging.getLogger("selenium").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+def cleanup_before_start():
+    try:
+        cleanup_script = Path(__file__).parent / "cleanup_processes.py"
+        if cleanup_script.exists():
+            subprocess.run([sys.executable, str(cleanup_script)], 
+                          timeout=30, 
+                          stderr=subprocess.PIPE, 
+                          stdout=subprocess.PIPE)
+            print("Đã hoàn thành quá trình dọn dẹp tiến trình")
+    except Exception as e:
+        print(f"Lỗi khi dọn dẹp tiến trình: {e}")
+
 if __name__ == "__main__":
-    # Thiết lập logging
+    cleanup_before_start()
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("Khởi động ứng dụng Rating Comic")
