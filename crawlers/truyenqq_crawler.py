@@ -178,9 +178,9 @@ def process_comic_worker(params):
                 
                 # Chuyển các giá trị sang số
                 try:
-                    comic["luot_xem"] = parse_number(comic["luot_xem"])
-                    comic["luot_thich"] = parse_number(comic["luot_thich"])
-                    comic["luot_theo_doi"] = parse_number(comic["luot_theo_doi"])
+                    comic["luot_xem"] = extract_number(comic["luot_xem"])
+                    comic["luot_thich"] = extract_number(comic["luot_thich"])
+                    comic["luot_theo_doi"] = extract_number(comic["luot_theo_doi"])
                 except Exception as e:
                     logger.warning(f"Worker {worker_id}: Lỗi khi chuyển đổi giá trị số: {e}")
                 
@@ -251,48 +251,20 @@ def extract_chapter_number(chapter_text):
     
     return 0  # Trả về 0 nếu không tìm thấy số chương
 
-def parse_number(text):
-    """Chuyển đổi các số có đơn vị K, M và dấu phẩy thành số nguyên."""
-    if text is None:
-        return 0
-
-    try:
-        text = str(text).lower().strip().replace(",", ".")  # Ép kiểu và xử lý
-
-        if text == "n/a":
-            return 0
-
-        multipliers = {"k": 1_000, "m": 1_000_000}
-        multiplier = 1
-
-        for suffix, value in multipliers.items():
-            if suffix in text:
-                multiplier = value
-                text = text.replace(suffix, "")
-                break
-
-        cleaned_text = re.sub(r'[^\d.]', '', text)
-        if not cleaned_text:
-            return 0
-
-        return int(float(cleaned_text) * multiplier)
-    except (ValueError, TypeError):
-        return 0
-
 def extract_number(text_value):
     """
     Trích xuất số từ chuỗi với nhiều định dạng
     Ví dụ: '1,234' -> 1234, '5K' -> 5000, '3.2M' -> 3200000
     """
-    if not text_value or text_value == "N/A":
-        return 0
-        
-    # Chỉ lấy phần số từ chuỗi
     try:
-        text_value = str(text_value).lower().strip()
+        if not text_value or text_value == 'N/A':
+            return 0
+            
+        text_value = str(text_value).strip()
         
-        if "k" in text_value:
-            num_part = text_value.replace('k', '')
+        # Xử lý hậu tố K và M
+        if 'K' in text_value.upper():
+            num_part = text_value.upper().replace('K', '')
             # Làm sạch và chuyển đổi
             if num_part.count('.') == 1:
                 return int(float(num_part) * 1000)
@@ -300,8 +272,8 @@ def extract_number(text_value):
                 cleaned = num_part.replace('.', '').replace(',', '')
                 return int(float(cleaned) * 1000)
             
-        elif "m" in text_value:
-            num_part = text_value.replace('m', '')
+        elif 'M' in text_value.upper():
+            num_part = text_value.upper().replace('M', '')
             # Làm sạch và chuyển đổi
             if num_part.count('.') == 1:
                 return int(float(num_part) * 1000000)
@@ -309,13 +281,16 @@ def extract_number(text_value):
                 cleaned = num_part.replace('.', '').replace(',', '')
                 return int(float(cleaned) * 1000000)
         else:
-            # Lấy tất cả các số từ chuỗi
-            numbers = re.findall(r'\d+', text_value)
-            if numbers:
-                # Lấy số lớn nhất nếu có nhiều số
-                return max(map(int, numbers))
-            return 0
-    except Exception:
+            # Xử lý số có nhiều dấu chấm là dấu phân cách hàng nghìn
+            if text_value.count('.') > 1:
+                text_value = text_value.replace('.', '')
+            
+            # Xử lý dấu phẩy là dấu phân cách hàng nghìn
+            text_value = text_value.replace(',', '')
+            
+            return int(float(text_value))
+    except Exception as e:
+        logger.error(f"Lỗi khi trích xuất số từ '{text_value}': {str(e)}")
         return 0
 
 def parse_relative_time(time_text):
@@ -779,9 +754,9 @@ class TruyenQQCrawler(BaseCrawler):
             
             # Chuyển các giá trị sang số
             try:
-                comic["luot_xem"] = parse_number(comic["luot_xem"])
-                comic["luot_thich"] = parse_number(comic["luot_thich"])
-                comic["luot_theo_doi"] = parse_number(comic["luot_theo_doi"])
+                comic["luot_xem"] = extract_number(comic["luot_xem"])
+                comic["luot_thich"] = extract_number(comic["luot_thich"])
+                comic["luot_theo_doi"] = extract_number(comic["luot_theo_doi"])
             except:
                 pass
                 
@@ -790,10 +765,7 @@ class TruyenQQCrawler(BaseCrawler):
             # Đảm bảo vẫn trả về đối tượng comic với thông tin cơ bản
         finally:
             if driver:
-                try:
-                    driver.quit()
-                except:
-                    pass
+                driver.quit()
                 
         return comic
     
