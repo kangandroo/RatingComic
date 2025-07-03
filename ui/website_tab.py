@@ -62,7 +62,7 @@ class WebsiteTab(QWidget):
         website_layout = QVBoxLayout()
         website_label = QLabel("Chọn website:")
         self.website_combo = QComboBox()
-        self.website_combo.addItems(["TruyenQQ", "NetTruyen", "Manhuavn"])
+        self.website_combo.addItems(["TruyenQQ", "NetTruyen", "Manhuavn", "Truyentranh3q"])
         self.website_combo.currentTextChanged.connect(self.on_website_changed)
         
         website_layout.addWidget(website_label)
@@ -466,6 +466,18 @@ class WebsiteTab(QWidget):
                 luot_danh_gia_item = QTableWidgetItem()
                 luot_danh_gia_item.setData(Qt.ItemDataRole.DisplayRole, int(comic.get("luot_danh_gia", 0)))
                 self.results_table.setItem(row, 8, luot_danh_gia_item)
+
+            elif comic.get("nguon") == "Truyentranh3q":
+                luot_thich_item = QTableWidgetItem()
+                luot_thich_item.setData(Qt.ItemDataRole.DisplayRole, int(comic.get("luot_thich", 0)))
+                self.results_table.setItem(row, 5, luot_thich_item)
+                
+                luot_theo_doi_item = QTableWidgetItem()
+                luot_theo_doi_item.setData(Qt.ItemDataRole.DisplayRole, int(comic.get("luot_theo_doi", 0)))
+                self.results_table.setItem(row, 6, luot_theo_doi_item)
+                
+                self.results_table.setItem(row, 7, QTableWidgetItem("N/A"))  
+                self.results_table.setItem(row, 8, QTableWidgetItem("N/A")) 
             
             # Hiển thị rating từ database nếu có
             if "base_rating" in comic and comic["base_rating"] is not None:
@@ -766,7 +778,7 @@ class WebsiteTab(QWidget):
     
     def calculate_optimal_worker_count(self, batch_size):
         """Trả về số worker cố định vì không muốn thay đổi tham số"""
-        return 8  # Giá trị cố định hoặc dựa trên cấu hình
+        return 8  
     
     def on_website_changed(self, website):
         """

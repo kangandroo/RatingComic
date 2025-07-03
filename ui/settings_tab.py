@@ -57,7 +57,7 @@ class SettingsTab(QWidget):
         
         # Số worker
         self.worker_count_spin = QSpinBox()
-        self.worker_count_spin.setRange(1, 20)
+        self.worker_count_spin.setRange(1, 25)
         general_layout.addRow("Số worker mặc định:", self.worker_count_spin)
         
         # Group box cho cài đặt websitee
@@ -75,6 +75,9 @@ class SettingsTab(QWidget):
         # URL Manhuavn
         self.manhuavn_url_edit = QLineEdit()
         websites_layout.addRow("Manhuavn:", self.manhuavn_url_edit)
+
+        self.truyen3q_url_edit = QLineEdit()
+        websites_layout.addRow("Truyentranh3q:", self.truyen3q_url_edit)
         
         # Group box cho cài đặt phân tích sentiment
         sentiment_group = QGroupBox("Phân tích sentiment")
@@ -124,6 +127,7 @@ class SettingsTab(QWidget):
         self.truyenqq_url_edit.setText(websites.get("TruyenQQ", "https://truyenqqgo.com"))
         self.nettruyen_url_edit.setText(websites.get("NetTruyen", "https://nettruyenvio.com"))
         self.manhuavn_url_edit.setText(websites.get("Manhuavn", "https://manhuavn.top"))
+        self.truyen3q_url_edit.setText(websites.get("Truyentranh3q", "https://truyentranh3q.com"))
         
         # Cài đặt sentiment
         sentiment_settings = self.config_manager.get("sentiment_analysis", {})
@@ -145,7 +149,8 @@ class SettingsTab(QWidget):
         websites = {
             "TruyenQQ": self.truyenqq_url_edit.text(),
             "NetTruyen": self.nettruyen_url_edit.text(),
-            "Manhuavn": self.manhuavn_url_edit.text()
+            "Manhuavn": self.manhuavn_url_edit.text(),
+            "Truyentranh3q": self.truyen3q_url_edit.text()
         }
         self.config_manager.set("supported_websites", websites)
         

@@ -77,7 +77,11 @@ class DataNormalizer:
                 # Chuẩn hóa lượt đánh giá
                 if isinstance(normalized.get("luot_danh_gia"), str):
                     normalized["luot_danh_gia"] = DataNormalizer.extract_number(normalized["luot_danh_gia"])
-            
+            elif source == "Truyentranh3q":
+                normalized.setdefault("luot_thich", 0)
+                normalized.setdefault("luot_theo_doi", 0)
+                normalized.setdefault("so_binh_luan", 0)
+
             return normalized
             
         except Exception as e:

@@ -40,7 +40,8 @@ class ConfigManager:
             "supported_websites": {
                 "TruyenQQ": "https://truyenqqgo.com",
                 "NetTruyen": "https://nettruyenvio.com",
-                "Manhuavn": "https://manhuavn.top"
+                "Manhuavn": "https://manhuavn.top",
+                "Truyentranh3q": "https://truyentranh3q.com"
             },
             "database_folder": "database",
             "sentiment_analysis": {

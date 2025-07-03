@@ -20,7 +20,7 @@ class MultipleDBManager:
         self.db_folder = db_folder
         self.current_source = None
         self.pool_size = pool_size
-        self.connection_pools = {}  # Pool kết nối SQLite theo nguồn
+        self.connection_pools = {}  
         
         # Tạo thư mục database nếu chưa tồn tại
         os.makedirs(db_folder, exist_ok=True)
@@ -38,6 +38,10 @@ class MultipleDBManager:
             "Manhuavn": {
                 "file": "manhuavn.db",
                 "tables": self.get_manhuavn_schema()
+            },
+            "Truyentranh3q": {
+                "file": "truyentranh3q.db",
+                "tables": self.get_truyentranh3q_schema()
             }
         }
         
@@ -153,6 +157,42 @@ class MultipleDBManager:
             """
         }
     
+    def get_truyentranh3q_schema(self):
+        """Schema cho Truyentranh3q database"""
+        return {
+            "comics": """
+                CREATE TABLE IF NOT EXISTS comics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ten_truyen TEXT NOT NULL,
+                    tac_gia TEXT,
+                    the_loai TEXT,
+                    mo_ta TEXT,
+                    link_truyen TEXT UNIQUE,
+                    so_chuong INTEGER DEFAULT 0,
+                    luot_xem INTEGER DEFAULT 0,
+                    luot_thich INTEGER DEFAULT 0,
+                    luot_theo_doi INTEGER DEFAULT 0,
+                    so_binh_luan INTEGER DEFAULT 0,
+                    trang_thai TEXT,
+                    nguon TEXT DEFAULT 'Truyentranh3q',
+                    base_rating REAL DEFAULT NULL,
+                    thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            "comments": """
+                CREATE TABLE IF NOT EXISTS comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    comic_id INTEGER,
+                    ten_nguoi_binh_luan TEXT,
+                    noi_dung TEXT,
+                    sentiment TEXT,
+                    sentiment_score REAL,
+                    thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (comic_id) REFERENCES comics (id)
+                )
+            """
+        }
+
     def set_source(self, source):
         """
         Thiết lập nguồn dữ liệu hiện tại
@@ -417,6 +457,27 @@ class MultipleDBManager:
                         comic.get("trang_thai", ""),
                         comic.get("nguon", "Manhuavn")
                     )
+                elif self.current_source == "Truyentranh3q":
+                    query = """
+                        INSERT OR REPLACE INTO comics 
+                        (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                        luot_xem, luot_thich, luot_theo_doi, so_binh_luan, trang_thai, nguon)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        comic.get("ten_truyen", ""),
+                        comic.get("tac_gia", "N/A"),
+                        comic.get("the_loai", ""),
+                        comic.get("mo_ta", ""),
+                        comic.get("link_truyen", ""),
+                        comic.get("so_chuong", 0),
+                        comic.get("luot_xem", 0),
+                        comic.get("luot_thich", 0),
+                        comic.get("luot_theo_doi", 0),
+                        comic.get("so_binh_luan", 0),
+                        comic.get("trang_thai", ""),
+                        comic.get("nguon", "Truyentranh3q")
+                    )
                     
                 cursor.execute(query, params)
                 
@@ -580,6 +641,27 @@ class MultipleDBManager:
                     comic.get("luot_danh_gia", 0),
                     comic.get("trang_thai", ""),
                     comic.get("nguon", "Manhuavn")
+                )
+            elif self.current_source == "Truyentranh3q":
+                query = """
+                    INSERT OR REPLACE INTO comics 
+                    (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                     luot_xem, luot_thich, luot_theo_doi, so_binh_luan, trang_thai, nguon)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                params = (
+                    comic.get("ten_truyen", ""),
+                    comic.get("tac_gia", "N/A"),
+                    comic.get("the_loai", ""),
+                    comic.get("mo_ta", ""),
+                    comic.get("link_truyen", ""),
+                    comic.get("so_chuong", 0),
+                    comic.get("luot_xem", 0),
+                    comic.get("luot_thich", 0),
+                    comic.get("luot_theo_doi", 0),
+                    comic.get("so_binh_luan", 0),
+                    comic.get("trang_thai", ""),
+                    comic.get("nguon", "Truyentranh3q")
                 )
                 
             cursor.execute(query, params)
@@ -776,6 +858,8 @@ class MultipleDBManager:
                 elif result.get("nguon") == "Manhuavn":
                     comic_data["Đánh giá"] = result.get("danh_gia", "")
                     comic_data["Lượt đánh giá"] = result.get("luot_danh_gia", 0)
+                elif result.get("nguon") == "Truyentranh3q":
+                    comic_data["Lượt thích"] = result.get("luot_thich", 0)
                 
                 comics_data.append(comic_data)
                 

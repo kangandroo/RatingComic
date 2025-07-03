@@ -34,7 +34,8 @@ class SQLiteHelper:
         self.schemas = {
             "TruyenQQ": self._get_truyenqq_schema(),
             "NetTruyen": self._get_nettruyen_schema(),
-            "Manhuavn": self._get_manhuavn_schema()
+            "Manhuavn": self._get_manhuavn_schema() ,
+            "Truyentranh3q": self._get_truyentranh3q_schema()
         }
         
         # Khởi tạo locks cho từng nguồn
@@ -154,6 +155,42 @@ class SQLiteHelper:
             """
         }
     
+    def _get_truyentranh3q_schema(self):
+        """Lấy schema cho Truyentranh3q database"""
+        # [Giữ nguyên code hiện tại]
+        return {
+            "comics": """
+                CREATE TABLE IF NOT EXISTS comics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ten_truyen TEXT NOT NULL,
+                    tac_gia TEXT,
+                    the_loai TEXT,
+                    mo_ta TEXT,
+                    link_truyen TEXT UNIQUE,
+                    so_chuong INTEGER DEFAULT 0,
+                    luot_xem INTEGER DEFAULT 0,
+                    luot_thich INTEGER DEFAULT 0,
+                    luot_theo_doi INTEGER DEFAULT 0,
+                    so_binh_luan INTEGER DEFAULT 0,
+                    trang_thai TEXT,
+                    nguon TEXT DEFAULT 'Truyentranh3q',
+                    thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            "comments": """
+                CREATE TABLE IF NOT EXISTS comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    comic_id INTEGER,
+                    ten_nguoi_binh_luan TEXT,
+                    noi_dung TEXT,
+                    sentiment TEXT,
+                    sentiment_score REAL,
+                    thoi_gian_cap_nhat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (comic_id) REFERENCES comics (id)
+                )
+            """
+        }
+    
     def _get_db_file(self, source_name):
         """
         Lấy đường dẫn đến file database dựa vào nguồn
@@ -169,7 +206,8 @@ class SQLiteHelper:
         db_files = {
             "TruyenQQ": "truyenqq.db",
             "NetTruyen": "nettruyen.db",
-            "Manhuavn": "manhuavn.db"
+            "Manhuavn": "manhuavn.db",
+            "Truyentranh3q": "truyentranh3q.db"
         }
         
         if source_name not in db_files:
@@ -406,6 +444,27 @@ class SQLiteHelper:
                         comic_data.get("luot_danh_gia", 0),
                         comic_data.get("trang_thai", ""),
                         comic_data.get("nguon", "Manhuavn")
+                    )
+                elif source_name == "Truyentranh3q":
+                    query = """
+                        INSERT OR REPLACE INTO comics 
+                        (ten_truyen, tac_gia, the_loai, mo_ta, link_truyen, so_chuong, 
+                        luot_xem, luot_thich, luot_theo_doi, so_binh_luan, trang_thai, nguon)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    params = (
+                        comic_data.get("ten_truyen", ""),
+                        comic_data.get("tac_gia", "N/A"),
+                        comic_data.get("the_loai", ""),
+                        comic_data.get("mo_ta", ""),
+                        comic_data.get("link_truyen", ""),
+                        comic_data.get("so_chuong", 0),
+                        comic_data.get("luot_xem", 0),
+                        comic_data.get("luot_thich", 0),
+                        comic_data.get("luot_theo_doi", 0),
+                        comic_data.get("so_binh_luan", 0),
+                        comic_data.get("trang_thai", ""),
+                        comic_data.get("nguon", "Truyentranh3q")
                     )
                 else:
                     continue

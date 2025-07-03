@@ -1,6 +1,7 @@
 from analysis.truyenqq_rating import TruyenQQRatingCalculator
 from analysis.nettruyen_rating import NetTruyenRatingCalculator
 from analysis.manhuavn_rating import ManhuavnRatingCalculator
+from analysis.truyentranh3q_rating import Truyentranh3qRatingCalculator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ class RatingFactory:
                 cls._calculators[source] = NetTruyenRatingCalculator()
             elif source == "Manhuavn":
                 cls._calculators[source] = ManhuavnRatingCalculator()
+            elif source == "Truyentranh3q":
+                cls._calculators[source] = Truyentranh3qRatingCalculator()
             else:
                 logger.warning(f"Không có calculator cho nguồn {source}, sử dụng NetTruyenRatingCalculator làm fallback")
                 cls._calculators[source] = NetTruyenRatingCalculator()

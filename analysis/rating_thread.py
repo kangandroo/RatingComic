@@ -20,7 +20,8 @@ class RatingCalculationThread(QThread):
         self.calculators = {
             "TruyenQQ": RatingFactory.get_calculator("TruyenQQ"),
             "NetTruyen": RatingFactory.get_calculator("NetTruyen"),
-            "Manhuavn": RatingFactory.get_calculator("Manhuavn")
+            "Manhuavn": RatingFactory.get_calculator("Manhuavn"),
+            "Truyentranh3q": RatingFactory.get_calculator("Truyentranh3q")
         }
     
     def run(self):

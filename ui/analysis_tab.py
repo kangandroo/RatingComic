@@ -198,7 +198,7 @@ class DetailAnalysisTab(QWidget):
         filter_layout = QHBoxLayout()
         filter_label = QLabel("Nguồn dữ liệu:")
         self.source_combo = QComboBox()
-        self.source_combo.addItems(["Tất cả", "TruyenQQ", "NetTruyen", "Manhuavn"])
+        self.source_combo.addItems(["Tất cả", "TruyenQQ", "NetTruyen", "Manhuavn", "Truyentranh3q"])
         self.source_combo.currentTextChanged.connect(self.filter_history_data)
 
         # Thêm bộ lọc thời gian
@@ -437,7 +437,7 @@ class DetailAnalysisTab(QWidget):
         
     def create_stats_data(self, data):
         """Tạo dữ liệu thống kê cho từng nguồn"""
-        sources = ['TruyenQQ', 'NetTruyen', 'Manhuavn', 'Tất cả']
+        sources = ['TruyenQQ', 'NetTruyen', 'Manhuavn', 'Truyentranh3q', 'Tất cả']
         stats = {
             'Nguồn': sources,
             'Số lượng truyện': [],
@@ -490,7 +490,7 @@ class DetailAnalysisTab(QWidget):
         source = self.source_combo.currentText()
         sources = []
         if source == "Tất cả":
-            sources = ["TruyenQQ", "NetTruyen", "Manhuavn"]
+            sources = ["TruyenQQ", "NetTruyen", "Manhuavn", 'Truyentranh3q']
         else:
             sources = [source]
         
@@ -1021,6 +1021,9 @@ class DetailAnalysisTab(QWidget):
                 danh_gia_item = QTableWidgetItem()
                 danh_gia_item.setData(Qt.ItemDataRole.DisplayRole, int(result.get("luot_danh_gia", 0)))
                 self.result_table.setItem(row, 7, danh_gia_item)
+            elif result.get("nguon") == "Truyentranh3q":
+                self.result_table.setItem(row, 6, QTableWidgetItem("N/A"))
+                self.result_table.setItem(row, 7, QTableWidgetItem("N/A"))
             
             # Thông tin điểm số
             base_rating_item = QTableWidgetItem()

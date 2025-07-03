@@ -1,6 +1,7 @@
 from crawlers.truyenqq_crawler import TruyenQQCrawler
 from crawlers.nettruyen_crawler import NetTruyenCrawler
 from crawlers.manhuavn_crawler import ManhuavnCrawler
+from crawlers.truyentranh3q_crawler import Truyentranh3qCrawler
 import logging
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,14 @@ class CrawlerFactory:
                 base_url=kwargs.get('base_url', supported_websites.get('Manhuavn', 'https://manhuavn.top')),
                 max_pages=kwargs.get('max_pages', config_manager.get('max_pages', 10)),
                 worker_count=kwargs.get('worker_count', config_manager.get('worker_count', 5))
+            )
+        elif crawler_type == "Truyentranh3q":
+            return Truyentranh3qCrawler(
+                db_manager,
+                config_manager,
+                base_url=kwargs.get('base_url', supported_websites.get('Truyentranh3q', 'https://truyentranh3q.com')),
+                max_pages=kwargs.get('max_pages', config_manager.get('max_pages', 10)),
+                worker_count=kwargs.get('worker_count', config_manager.get('worker_count', 5))  
             )
         else:
             logger.error(f"Không hỗ trợ loại crawler: {crawler_type}")
