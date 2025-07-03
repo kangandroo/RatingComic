@@ -757,27 +757,20 @@ class NetTruyenCrawler(BaseCrawler):
     @retry(max_retries=2)
     def crawl_comments(self, comic, time_limit=None, days_limit=None):
         """Crawl comment cho một truyện cụ thể với giới hạn thời gian"""
-        driver = None
+        driver = setup_driver()
         comments = []
         unique_contents = set()
         old_comments_count = 0
         
         try:
-            # Kiểm tra tài nguyên trước khi tạo driver
-            if not check_system_resources():
-                logger.warning(f"Tài nguyên hệ thống thấp cho truyện {comic.get('ten_truyen')}, tạm dừng")
-                time.sleep(5)
-                gc.collect()
-                if not check_system_resources():
-                    logger.error(f"Tài nguyên hệ thống vẫn không đủ, bỏ qua crawl comment cho truyện {comic.get('ten_truyen')}")
-                    return []
+
             
             # Lấy link từ comic
             link = comic.get("link_truyen")
-            comic_id = comic.get("id")
-            
-            if not link or not comic_id:
-                logger.error(f"Không tìm thấy link hoặc ID truyện: {comic.get('ten_truyen', 'Unknown')}")
+            bypass_cloudflare(driver, link)
+            if not link:
+                logger.error(f"Không tìm thấy link truyện cho: {comic.get('ten_truyen')}")
+                driver.quit()
                 return []
             
             # Log thông tin về giới hạn thời gian
@@ -786,34 +779,9 @@ class NetTruyenCrawler(BaseCrawler):
             else:
                 logger.info(f"Crawl tất cả comment cho truyện: {comic.get('ten_truyen')}")
             
-            # Khởi tạo driver
-            try:
-                driver = setup_driver()
-            except Exception as e:
-                logger.error(f"Không thể tạo driver cho crawl comment: {e}")
-                return []
-            
-            # Bypass Cloudflare
-            bypass_cloudflare(driver, link)
-            
             # Truy cập trang và chuyển đến phần comment
-            try:
-                driver.get(link)
-            except WebDriverException as e:
-                logger.error(f"Lỗi khi truy cập URL {link}: {e}")
-                if driver:
-                    driver.quit()
-                return []
-                        
+            driver.get(link)
             time.sleep(random.uniform(2, 3))
-            
-            # Kiểm tra xem trang có load thành công không
-            page_source = driver.page_source.lower()
-            if "không tìm thấy" in page_source or "not found" in page_source or "404" in page_source:
-                logger.error(f"Trang không tồn tại hoặc bị lỗi 404: {link}")
-                driver.quit()
-                return []
-            
             try:
                 driver.execute_script("joinComment()")
                 time.sleep(random.uniform(2, 3))
@@ -825,12 +793,6 @@ class NetTruyenCrawler(BaseCrawler):
             stop_crawling = False
             
             while page_comment <= max_comment_pages and not stop_crawling:
-                # Kiểm tra RAM trước khi tiếp tục
-                if page_comment > 1 and page_comment % 5 == 0:
-                    if not check_system_resources():
-                        logger.warning("Tài nguyên hệ thống thấp, dừng tải thêm comment")
-                        break
-                
                 comments_in_current_page = 0
                 old_comments_in_page = 0
                 
@@ -863,14 +825,14 @@ class NetTruyenCrawler(BaseCrawler):
                         try:
                             name_elem = comment.find_element("css selector", ".comment-header span.authorname")
                             name = name_elem.text.strip() if name_elem.text else "Người dùng ẩn danh"
-                        except (NoSuchElementException, StaleElementReferenceException):
+                        except:
                             name = "Người dùng ẩn danh"
                         
                         # Lấy nội dung bình luận
                         try:
                             content_elem = comment.find_element("css selector", ".comment-content")
                             content = content_elem.text.strip() if content_elem.text else "N/A"
-                        except (NoSuchElementException, StaleElementReferenceException):
+                        except:
                             content = "N/A"
                         
                         time_text = ""
@@ -888,55 +850,40 @@ class NetTruyenCrawler(BaseCrawler):
                                     time_text = abbr_elem.get_attribute("title") or abbr_elem.text.strip()
                                     if time_text:
                                         break
-                                except (NoSuchElementException, StaleElementReferenceException):
+                                except:
                                     continue
-                        except Exception as e:
-                            logger.debug(f"Không tìm thấy thẻ chứa thời gian: {e}")
+                                    
+                            if time_text:
+                                logger.info(f"Thời gian comment raw: '{time_text}'")
+                        except:
+                            logger.debug("Không tìm thấy thẻ chứa thời gian")
                         
                         # Xử lý thời gian
                         comment_time = datetime.now() 
                         if time_text:
-                            comment_time = parse_relative_time(time_text)
+                            comment_time = self.parse_relative_time(time_text)
                         
                         # Kiểm tra giới hạn thời gian
                         if time_limit and comment_time < time_limit:
                             logger.info(f"Comment quá cũ: '{time_text}' ({comment_time.strftime('%Y-%m-%d')} < {time_limit.strftime('%Y-%m-%d')})")
                             old_comments_count += 1
-                            old_comments_in_page += 1
-                            continue
+                            stop_crawling = True
+                            break
                         
                         # Kiểm tra trùng lặp (chỉ với nội dung có ý nghĩa)
                         if content != "N/A" and content in unique_contents:
-                            logger.debug("Phát hiện comment trùng lặp, bỏ qua")
-                            continue
+                            logger.info("Phát hiện comment trùng lặp, dừng crawl")
+                            stop_crawling = True
+                            break
                         
                         if content != "N/A" and len(content) > 5:
                             unique_contents.add(content)
-                        
-                        # Đảm bảo nội dung bình luận không để trống
-                        if not content or content.strip() == "":
-                            content = "N/A"
-                            
-                        # Đảm bảo tên người bình luận không để trống
-                        if not name or name.strip() == "":
-                            name = "Người dùng ẩn danh"
-                            
-                        # Loại bỏ các ký tự đặc biệt có thể gây lỗi SQL
-                        content = content.replace("'", "''").replace('"', '""')
-                        name = name.replace("'", "''").replace('"', '""')
-                        
-                        # Giới hạn độ dài để tránh lỗi database
-                        if len(content) > 2000:
-                            content = content[:1997] + "..."
-                            
-                        if len(name) > 100:
-                            name = name[:97] + "..."
                         
                         # Thêm comment vào danh sách kết quả
                         comments.append({
                             "ten_nguoi_binh_luan": name,
                             "noi_dung": content,
-                            "comic_id": comic_id,
+                            "comic_id": comic.get("id"),
                             "thoi_gian_binh_luan": comment_time.strftime("%Y-%m-%d %H:%M:%S"),
                             "thoi_gian_cap_nhat": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
@@ -949,15 +896,8 @@ class NetTruyenCrawler(BaseCrawler):
                 # Thống kê kết quả trang hiện tại
                 logger.info(f"Trang {page_comment}: {comments_in_current_page} comment mới, {old_comments_in_page} comment quá cũ")
                 
-                # Kiểm tra nếu tất cả comment trên trang đều quá cũ
-                if time_limit and old_comments_in_page > 0 and old_comments_in_page == total_comments_in_page:
-                    logger.info(f"Tất cả {total_comments_in_page} comment trên trang {page_comment} đều cũ hơn {days_limit} ngày, dừng crawl")
-                    stop_crawling = True
-                    break
-                
-                # Kiểm tra nếu không tìm thấy comment mới
-                if comments_in_current_page == 0:
-                    logger.info("Không tìm thấy comment mới nào, dừng crawl")
+                if stop_crawling:
+                    logger.info("Dừng crawl do nhiều comment quá cũ")
                     break
                 
                 # Tìm nút Next bằng nhiều cách khác nhau
@@ -1030,35 +970,12 @@ class NetTruyenCrawler(BaseCrawler):
                 except Exception as e:
                     logger.error(f"Lỗi khi tìm/click nút chuyển trang: {e}")
                     break
-            
-            # Lưu comments vào database
-            if comments:
-                try:
-                    logger.info(f"Lưu {len(comments)} comment cho truyện ID {comic_id}")
-                    
-                    # Lưu theo batch nhỏ để tránh lỗi
-                    batch_size = 100
-                    for i in range(0, len(comments), batch_size):
-                        batch = comments[i:i+batch_size]
-                        try:
-                            self.sqlite_helper.save_comments_to_db(comic_id, batch, "NetTruyen")
-                            logger.debug(f"Đã lưu batch {i//batch_size + 1}/{(len(comments)-1)//batch_size + 1} ({len(batch)} comment)")
-                        except Exception as e:
-                            logger.error(f"Lỗi khi lưu batch comment: {e}")
-                except Exception as e:
-                    logger.error(f"Lỗi khi lưu comments vào database: {e}")
 
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {e}")
         finally:
             if driver:
-                try:
-                    driver.quit()
-                except:
-                    pass
-            
-            # Thu gom rác
-            gc.collect()
+                driver.quit()
             
         if time_limit:
             logger.info(f"Đã crawl được {len(comments)} comment cho truyện {comic.get('ten_truyen')} (bỏ qua {old_comments_count} comment quá cũ)")

@@ -774,7 +774,6 @@ class TruyenQQCrawler(BaseCrawler):
         """Crawl comment cho một truyện cụ thể"""
         driver = None
         all_comments = []
-        old_comments_count = 0
         
         try:
             comic_url = comic.get("link_truyen")
@@ -782,25 +781,18 @@ class TruyenQQCrawler(BaseCrawler):
             
             if not comic_url or not comic_id:
                 logger.error(f"Không tìm thấy link hoặc ID truyện: {comic.get('ten_truyen', 'Unknown')}")
+                if driver:
+                    driver.quit()
                 return []
-            
-            if time_limit:
-                logger.info(f"Crawl comment cho truyện: {comic.get('ten_truyen')} từ {days_limit} ngày gần đây ({time_limit.strftime('%Y-%m-%d')})")
-            else:
-                logger.info(f"Crawl tất cả comment cho truyện: {comic.get('ten_truyen')}")
-            
-            # Kiểm tra tài nguyên trước khi tạo driver
-            if not check_system_resources():
-                logger.warning("Tài nguyên hệ thống thấp, tạm dừng trước khi tạo driver")
-                time.sleep(5)
-                gc.collect()
                 
+            # logger.info(f"Đang crawl comment cho truyện: {comic.get('ten_truyen')} (ID: {comic_id})")
+            
             # Khởi tạo WebDriver
             driver = create_chrome_driver()
             
             try:
                 driver.get(comic_url)
-            except WebDriverException as e:
+            except Exception as e:
                 logger.error(f"Lỗi khi truy cập URL {comic_url}: {str(e)}")
                 if driver:
                     driver.quit()
@@ -808,11 +800,11 @@ class TruyenQQCrawler(BaseCrawler):
                         
             time.sleep(random.uniform(1, 2))  
             
-            # Kiểm tra xem trang có load thành công không
-            page_source = driver.page_source.lower()
-            if "không tìm thấy" in page_source or "not found" in page_source or "404" in page_source:
-                logger.error(f"Trang không tồn tại hoặc bị lỗi 404: {comic_url}")
-                driver.quit()
+            # Kiểm tra xem trang có tồn tại không
+            if "Page not found" in driver.title or "404" in driver.title:
+                logger.error(f"Trang không tồn tại: {comic_url}")
+                if driver:
+                    driver.quit()
                 return []
             
             # Lặp qua các trang comment
@@ -823,12 +815,6 @@ class TruyenQQCrawler(BaseCrawler):
                 try:
                     # Debug thông tin trang hiện tại
                     logger.info(f"Đang tải comment trang {page_comment}...")
-                    
-                    # Kiểm tra RAM trước khi tiếp tục
-                    if page_comment > 1 and page_comment % 5 == 0:
-                        if not check_system_resources():
-                            logger.warning("Tài nguyên hệ thống thấp, dừng tải thêm comment")
-                            break
                     
                     # Kiểm tra xem có hàm loadComment không
                     has_load_comment = driver.execute_script("return typeof loadComment === 'function'")
@@ -854,26 +840,9 @@ class TruyenQQCrawler(BaseCrawler):
                         
                     logger.info(f"Tìm thấy {len(comment_elements)} comment trên trang {page_comment}")
                     
-                    # Kiểm tra thời gian của comment cuối nếu có giới hạn thời gian
-                    if time_limit and comment_elements:
-                        try:
-                            last_comment = comment_elements[-1]
-                            time_span = last_comment.find_element(By.CSS_SELECTOR, "div.action-comment span.time")
-                            time_text = time_span.get_attribute("datetime") or time_span.text.strip()
-                            
-                            if time_text:
-                                comment_time = parse_relative_time(time_text)
-                                
-                                # Kiểm tra nếu comment cuối cùng đã quá cũ
-                                if comment_time < time_limit:
-                                    logger.info(f"Dừng tải thêm comment: Đã phát hiện comment quá cũ ({time_text})")
-                                    stop_crawling = True
-                        except (NoSuchElementException, StaleElementReferenceException) as e:
-                            logger.debug(f"Không thể lấy thời gian của comment cuối: {e}")
-                    
                     # Xử lý từng comment
                     new_comments_found = 0
-                    page_old_comments_count = 0
+                    old_comments_count = 0
                     for comment_elem in comment_elements:
                         try:
                             # Thử dùng JavaScript để lấy thông tin
@@ -895,7 +864,7 @@ class TruyenQQCrawler(BaseCrawler):
                                 
                             # Đảm bảo tên người bình luận không để trống
                             if not name or name.strip() == "":
-                                name = "Người dùng ẩn danh"
+                                name = "N/A"
                                 
                             comment_time = datetime.now()  # Mặc định là thời gian hiện tại
                             if time_text:
@@ -903,20 +872,8 @@ class TruyenQQCrawler(BaseCrawler):
                             
                             if time_limit and comment_time < time_limit:
                                 logger.debug(f"Comment quá cũ ({time_text}), bỏ qua")
-                                page_old_comments_count += 1
                                 old_comments_count += 1
                                 continue
-                            
-                            # Loại bỏ các ký tự đặc biệt có thể gây lỗi SQL
-                            content = content.replace("'", "''").replace('"', '""')
-                            name = name.replace("'", "''").replace('"', '""')
-                            
-                            # Giới hạn độ dài để tránh lỗi database
-                            if len(content) > 2000:
-                                content = content[:1997] + "..."
-                                
-                            if len(name) > 100:
-                                name = name[:97] + "..."
                             
                             # Tạo đối tượng comment
                             comment_data = {
@@ -939,16 +896,12 @@ class TruyenQQCrawler(BaseCrawler):
                                 all_comments.append(comment_data)
                                 new_comments_found += 1
                                 
-                        except (StaleElementReferenceException, NoSuchElementException) as e:
-                            logger.debug(f"Phần tử comment không còn tồn tại: {e}")
-                            continue
                         except Exception as e:
                             logger.error(f"Lỗi khi xử lý comment: {str(e)}")
-                            continue
                     
                     logger.info(f"Đã thêm {new_comments_found} comment mới từ trang {page_comment}")
                     
-                    if time_limit and page_old_comments_count > 0 and page_old_comments_count == len(comment_elements):
+                    if time_limit and old_comments_count > 0 and old_comments_count == len(comment_elements):
                         logger.info(f"Tất cả {len(comment_elements)} comment trên trang {page_comment} đều cũ hơn {days_limit} ngày, dừng crawl")
                         stop_crawling = True
                         break                    
@@ -967,20 +920,8 @@ class TruyenQQCrawler(BaseCrawler):
             
             # Lưu comments vào database sử dụng SQLiteHelper
             if all_comments:
-                try:
-                    logger.info(f"Lưu {len(all_comments)} comment cho truyện ID {comic_id}")
-                    
-                    # Lưu theo batch nhỏ để tránh lỗi
-                    batch_size = 100
-                    for i in range(0, len(all_comments), batch_size):
-                        batch = all_comments[i:i+batch_size]
-                        try:
-                            self.sqlite_helper.save_comments_to_db(comic_id, batch, "TruyenQQ")
-                            logger.debug(f"Đã lưu batch {i//batch_size + 1}/{(len(all_comments)-1)//batch_size + 1} ({len(batch)} comment)")
-                        except Exception as e:
-                            logger.error(f"Lỗi khi lưu batch comment: {e}")
-                except Exception as e:
-                    logger.error(f"Lỗi khi lưu comments vào database: {e}")
+                logger.info(f"Lưu {len(all_comments)} comment cho truyện ID {comic_id}")
+                self.sqlite_helper.save_comments_to_db(comic_id, all_comments, "TruyenQQ")
             
         except Exception as e:
             logger.error(f"Lỗi khi crawl comment: {str(e)}")
@@ -988,16 +929,7 @@ class TruyenQQCrawler(BaseCrawler):
             
         finally:
             if driver is not None:
-                try:
-                    driver.quit()
-                except:
-                    pass
-        
-        if time_limit:
-            logger.info(f"Đã crawl được {len(all_comments)} comment cho truyện {comic.get('ten_truyen')} (bỏ qua {old_comments_count} comment quá cũ)")
-        else:
-            logger.info(f"Đã crawl được {len(all_comments)} comment cho truyện {comic.get('ten_truyen')}")
-        
+                driver.quit()
         return all_comments
 
 # Import cần thiết, thêm vào phần đầu nếu cần

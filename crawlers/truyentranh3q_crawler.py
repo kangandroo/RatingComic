@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 MAX_MEMORY_PERCENT = 80  # Giới hạn % RAM sử dụng
 MAX_DRIVER_INSTANCES = 25  # Giới hạn số lượng driver đồng thời
 DEFAULT_TIMEOUT = 30  # Timeout mặc định (giây)
-MAX_RETRIES = 3  # Số lần thử lại tối đa
+MAX_RETRIES = 3  
 
 # Semaphore để kiểm soát số lượng driver
 driver_semaphore = multiprocessing.Semaphore(MAX_DRIVER_INSTANCES)
@@ -625,12 +625,8 @@ class Truyentranh3qCrawler(BaseCrawler):
                 
                 # Tạo và quản lý pool processes
                 try:
-                    # Số lượng process động dựa trên tình trạng hệ thống
-                    # Giảm số lượng worker xuống để tránh lỗi Permission Error
-                    dynamic_worker_count = min(2, max(1, psutil.cpu_count(logical=False) - 2))
+                    dynamic_worker_count = min(self.worker_count, max(1, psutil.cpu_count(logical=False) - 1))
                     
-                    # Để tránh lỗi "PermissionError: [WinError 5] Access is denied" trên Windows,
-                    # đặt maxtasksperchild=1 để tạo process mới sau mỗi task
                     with Pool(processes=dynamic_worker_count, initializer=init_process, maxtasksperchild=1) as pool:
                         try:
                             # Sử dụng map thay vì map_async để đơn giản hóa
@@ -765,7 +761,7 @@ class Truyentranh3qCrawler(BaseCrawler):
         """Crawl comment cho một truyện cụ thể"""
         driver = None
         all_comments = []
-        old_comments_count = 0
+        old_comments_count = 0  # Khởi tạo biến ở đầu phương thức để tránh lỗi
         
         try:
             comic_url = comic.get("link_truyen")
@@ -773,6 +769,8 @@ class Truyentranh3qCrawler(BaseCrawler):
             
             if not comic_url or not comic_id:
                 logger.error(f"Không tìm thấy link hoặc ID truyện: {comic.get('ten_truyen', 'Unknown')}")
+                if driver:
+                    driver.quit()
                 return []
             
             if time_limit:
@@ -796,16 +794,24 @@ class Truyentranh3qCrawler(BaseCrawler):
                 if driver:
                     driver.quit()
                 return []
-                        
+        
             time.sleep(random.uniform(1, 2))  
             
-            # Kiểm tra xem trang có load thành công không
-            page_source = driver.page_source.lower()
-            if "không tìm thấy" in page_source or "not found" in page_source or "404" in page_source:
-                logger.error(f"Trang không tồn tại hoặc bị lỗi 404: {comic_url}")
-                driver.quit()
+            if "Page not found" in driver.title or "404" in driver.title:
+                logger.error(f"Trang không tồn tại: {comic_url}")
+                if driver:
+                    driver.quit()
                 return []
-            
+
+            # Chờ phần tử comment container được tải
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".comment-container"))
+                )
+            except Exception as e:
+                logger.warning(f"Không tìm thấy container bình luận: {e}")
+                # Tiếp tục thực hiện vì có thể không có bình luận
+
             # Lặp qua các trang comment
             page_comment = 1
             max_pages = 100  
@@ -821,23 +827,21 @@ class Truyentranh3qCrawler(BaseCrawler):
                             logger.warning("Tài nguyên hệ thống thấp, dừng tải thêm comment")
                             break
                     
-                    # Kiểm tra xem có hàm loadComment không
-                    has_load_comment = driver.execute_script("return typeof loadComment === 'function'")
-                    if not has_load_comment:
-                        logger.warning("Hàm loadComment không tồn tại trên trang")
-                        break
+                    # Thử tìm các phần tử comment với nhiều selector khác nhau
+                    comment_elements = []
                     
-                    # Gọi hàm loadComment để tải comment trang tiếp theo
-                    try:
-                        driver.execute_script("loadComment(arguments[0]);", page_comment)
-                    except Exception as e:
-                        logger.error(f"Lỗi khi gọi hàm loadComment: {str(e)}")
-                        break
-                        
-                    time.sleep(random.uniform(2, 3))  
+                    # Thử các selector khác nhau để tìm bình luận
+                    selectors = [
+                        ".list-comment article",  # Thử selector này trước
+                        ".item-comment",          # Selector thứ hai
+                        ".comment-container .comment" # Selector thứ ba
+                    ]
                     
-                    # Kiểm tra xem có comment không - cập nhật selector
-                    comment_elements = driver.find_elements(By.CSS_SELECTOR, ".item-comment")
+                    for selector in selectors:
+                        comment_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        if comment_elements:
+                            logger.info(f"Đã tìm thấy bình luận với selector: {selector}")
+                            break
                     
                     if not comment_elements:
                         logger.info(f"Không tìm thấy comment nào trên trang {page_comment}")
@@ -845,37 +849,63 @@ class Truyentranh3qCrawler(BaseCrawler):
                         
                     logger.info(f"Tìm thấy {len(comment_elements)} comment trên trang {page_comment}")
                     
-                    # Kiểm tra thời gian của comment cuối nếu có giới hạn thời gian
-                    if time_limit and comment_elements:
-                        try:
-                            last_comment = comment_elements[-1]
-                            time_span = last_comment.find_element(By.CSS_SELECTOR, ".action-comment.time i")
-                            time_text = time_span.get_attribute("datetime") or time_span.text.strip()
-                            
-                            if time_text:
-                                comment_time = parse_relative_time(time_text)
-                                
-                                # Kiểm tra nếu comment cuối cùng đã quá cũ
-                                if comment_time < time_limit:
-                                    logger.info(f"Dừng tải thêm comment: Đã phát hiện comment quá cũ ({time_text})")
-                                    stop_crawling = True
-                        except (NoSuchElementException, StaleElementReferenceException) as e:
-                            logger.debug(f"Không thể lấy thời gian của comment cuối: {e}")
-                    
-                    # Xử lý từng comment - cập nhật các selector để lấy thông tin bình luận
+                    # Xử lý từng comment
                     new_comments_found = 0
                     page_old_comments_count = 0
+                    
                     for comment_elem in comment_elements:
                         try:
-                            # Cập nhật selector để lấy tên người bình luận
-                            name = get_text_safe(comment_elem, ".outline-content-comment > div:nth-child(1) > strong", "Ẩn danh")
+                            # Thử các selector khác nhau để lấy tên người bình luận
+                            name = None
+                            for name_selector in [
+                                ".outline-content-comment > div:nth-child(1) > strong", 
+                                ".user-name", 
+                                ".comment-info .name"
+                            ]:
+                                try:
+                                    name_elem = comment_elem.find_element(By.CSS_SELECTOR, name_selector)
+                                    if name_elem:
+                                        name = name_elem.text.strip()
+                                        break
+                                except:
+                                    continue
                             
-                            # Cập nhật selector để lấy nội dung bình luận
-                            content = get_text_safe(comment_elem, ".outline-content-comment > div.content-comment > div > p", "N/A")
+                            if not name:
+                                name = "Người dùng ẩn danh"
                             
-                            # Lấy thời gian bình luận
-                            time_text = get_text_safe(comment_elem, ".action-comment.time", "N/A")
-
+                            # Thử các selector khác nhau để lấy nội dung bình luận
+                            content = None
+                            for content_selector in [
+                                ".outline-content-comment > div.content-comment > div > p",
+                                ".comment-content p",
+                                ".content"
+                            ]:
+                                try:
+                                    content_elem = comment_elem.find_element(By.CSS_SELECTOR, content_selector)
+                                    if content_elem:
+                                        content = content_elem.text.strip()
+                                        break
+                                except:
+                                    continue
+                            
+                            if not content:
+                                content = "N/A"
+                            
+                            # Thử các selector khác nhau để lấy thời gian bình luận
+                            time_text = None
+                            for time_selector in [
+                                ".action-comment.time i",
+                                ".comment-time",
+                                ".time"
+                            ]:
+                                try:
+                                    time_elem = comment_elem.find_element(By.CSS_SELECTOR, time_selector)
+                                    if time_elem:
+                                        time_text = time_elem.get_attribute("datetime") or time_elem.text.strip()
+                                        break
+                                except:
+                                    continue
+                            
                             # Đảm bảo nội dung bình luận không để trống
                             if not content or content.strip() == "":
                                 content = "N/A"
@@ -884,7 +914,7 @@ class Truyentranh3qCrawler(BaseCrawler):
                             if not name or name.strip() == "":
                                 name = "Người dùng ẩn danh"
                                 
-                            comment_time = datetime.now()  # Mặc định là thời gian hiện tại
+                            comment_time = datetime.now()  
                             if time_text:
                                 comment_time = parse_relative_time(time_text)
                             
@@ -944,9 +974,8 @@ class Truyentranh3qCrawler(BaseCrawler):
                     if new_comments_found == 0:
                         logger.info(f"Không tìm thấy comment mới nào trên trang {page_comment}")
                         break
-                    
-                    # Chuyển đến trang tiếp theo
-                    page_comment += 1
+                
+                    break
                     
                 except Exception as e:
                     logger.error(f"Lỗi khi xử lý trang comment {page_comment}: {str(e)}")
