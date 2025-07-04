@@ -7,10 +7,8 @@ from pathlib import Path
 
 # Đơn giản hóa xử lý multiprocessing
 if hasattr(sys, 'frozen'):
-    # Chỉ dùng freeze_support, không sửa đổi Process class
     multiprocessing.freeze_support()
     
-    # Nếu trên Windows, đặt start method 
     if sys.platform.startswith('win'):
         if multiprocessing.get_start_method(allow_none=True) != 'spawn':
             multiprocessing.set_start_method('spawn', force=True)
