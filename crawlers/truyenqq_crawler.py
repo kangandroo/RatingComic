@@ -640,43 +640,26 @@ class TruyenQQCrawler(BaseCrawler):
                     
                     with Pool(processes=dynamic_worker_count, initializer=init_process, maxtasksperchild=3) as pool:
                         try:
-                            result_objects = []
+                            # Sử dụng map thay vì map_async để đơn giản hóa
+                            results = pool.map(process_comic_worker, worker_params, chunksize=1)
                             
-                            for idx, param in enumerate(worker_params):
-                                if idx > 0:
-                                    delay = random.uniform(2.0, 4.0) if is_amd else random.uniform(0.5, 1.5)
-                                    # logger.info(f"Đợi {delay:.2f}s trước khi khởi tạo process #{idx+1}")
-                                    time.sleep(delay)
-                                
-                                result_obj = pool.apply_async(process_comic_worker, (param,))
-                                result_objects.append(result_obj)
-                            
-                            results = []
-                            for idx, result_obj in enumerate(result_objects):
-                                try:
-                                    timeout_seconds = 180
-                                    result = result_obj.get(timeout=timeout_seconds)
-                                    if result is not None:
-                                        results.append(result)
-                                        
-                                        # Cập nhật tiến độ từng phần
-                                        with self.processed_comics.get_lock():
-                                            self.processed_comics.value += 1
-                                            
-                                        if progress_callback and len(raw_comics) > 0:
-                                            progress = (self.processed_comics.value / len(raw_comics)) * 100
-                                            progress_callback.emit(int(min(progress, 100)))
-                                            
-                                except multiprocessing.TimeoutError:
-                                    logger.error(f"Timeout khi xử lý task #{idx+1}")
-                                except Exception as e:
-                                    logger.error(f"Lỗi khi lấy kết quả từ task #{idx+1}: {e}")
+                            # Lọc ra các kết quả không None
+                            valid_results = [r for r in results if r is not None]
                             
                             # Cập nhật số lượng truyện đã xử lý
-                            batch_comics_count = len(results)
+                            batch_comics_count = len(valid_results)
                             comics_count += batch_comics_count
                             
+                            # Cập nhật biến đếm shared
+                            with self.processed_comics.get_lock():
+                                self.processed_comics.value += batch_comics_count
+                            
                             logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
+                            
+                            # Cập nhật tiến độ
+                            if progress_callback and len(raw_comics) > 0:
+                                progress = 25 + (self.processed_comics.value / len(raw_comics)) * 75
+                                progress_callback.emit(int(min(progress, 100)))
                             
                         except Exception as e:
                             logger.error(f"Lỗi khi xử lý map trong pool: {e}")
