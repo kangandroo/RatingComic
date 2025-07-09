@@ -19,6 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException, StaleElementReferenceException
 from utils.sqlite_helper import SQLiteHelper
 from datetime import datetime, timedelta
+from tempfile import mkdtemp
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,8 @@ def process_comic_worker(params):
     """Hàm để xử lý một truyện trong một process riêng biệt"""
     comic, db_path, base_url, worker_id = params
     
+    time.sleep(random.uniform(1, 3)*(worker_id % 5 + 1) / 5)
+
     driver = None
     sqlite_helper = None
     
@@ -367,18 +370,21 @@ def create_chrome_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-accelerated-2d-canvas")
-
+    chrome_options.add_argument("--disable-accelerated-video-decode")
+    chrome_options.add_argument("--disable-accelerated-video-encode")
+    chrome_options.add_argument("--disable-gpu-compositing")
+    chrome_options.add_argument("--disable-webgl")
+    chrome_options.add_argument("--disable-webrtc-hw-encoding")
+    chrome_options.add_argument("--disable-webrtc-hw-decoding")
+    chrome_options.add_argument("--disable-gl-drawing-for-tests")
     chrome_options.add_argument("--disable-usb") 
     chrome_options.add_argument("--disable-features=WebUSB,UsbChooserUI")
-    
-    # Giảm tài nguyên tiêu thụ
     chrome_options.add_argument("--memory-model=low")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-web-security")
     chrome_options.add_argument("--disable-popup-blocking")
-    
-    # Bỏ qua cảnh báo automation
+    chrome_options.add_argument(f'--user-data-dir={mkdtemp()}')
     chrome_options.add_experimental_option('excludeSwitches', ["enable-automation", "enable-logging"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
@@ -434,7 +440,7 @@ class TruyenQQCrawler(BaseCrawler):
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
-        available_workers = max(1, min(cpu_count - 1, worker_count))
+        available_workers = max(1, worker_count)
         self.worker_count = min(available_workers, MAX_DRIVER_INSTANCES)
         logger.info(f"Khởi tạo với {self.worker_count} workers (Từ {worker_count} yêu cầu, {cpu_count} CPU)")
         
@@ -613,7 +619,7 @@ class TruyenQQCrawler(BaseCrawler):
                 return {"count": 0, "time_taken": time.time() - start_time, "website": "TruyenQQ"}
             
             # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
-            batch_size = min(100, len(raw_comics))
+            batch_size = min(50, len(raw_comics))
             
             for i in range(0, len(raw_comics), batch_size):
                 # Kiểm tra tài nguyên hệ thống trước khi bắt đầu batch mới
@@ -630,30 +636,47 @@ class TruyenQQCrawler(BaseCrawler):
                 # Tạo và quản lý pool processes
                 try:
                     # Số lượng process động dựa trên tình trạng hệ thống
-                    dynamic_worker_count = min(self.worker_count, max(1, psutil.cpu_count(logical=False) - 1))
+                    dynamic_worker_count = max(self.worker_count, 1)
                     
                     with Pool(processes=dynamic_worker_count, initializer=init_process, maxtasksperchild=3) as pool:
                         try:
-                            # Sử dụng map thay vì map_async để đơn giản hóa
-                            results = pool.map(process_comic_worker, worker_params, chunksize=1)
+                            result_objects = []
                             
-                            # Lọc ra các kết quả không None
-                            valid_results = [r for r in results if r is not None]
+                            for idx, param in enumerate(worker_params):
+                                if idx > 0:
+                                    delay = random.uniform(2.0, 4.0) if is_amd else random.uniform(0.5, 1.5)
+                                    # logger.info(f"Đợi {delay:.2f}s trước khi khởi tạo process #{idx+1}")
+                                    time.sleep(delay)
+                                
+                                result_obj = pool.apply_async(process_comic_worker, (param,))
+                                result_objects.append(result_obj)
+                            
+                            results = []
+                            for idx, result_obj in enumerate(result_objects):
+                                try:
+                                    timeout_seconds = 180
+                                    result = result_obj.get(timeout=timeout_seconds)
+                                    if result is not None:
+                                        results.append(result)
+                                        
+                                        # Cập nhật tiến độ từng phần
+                                        with self.processed_comics.get_lock():
+                                            self.processed_comics.value += 1
+                                            
+                                        if progress_callback and len(raw_comics) > 0:
+                                            progress = (self.processed_comics.value / len(raw_comics)) * 100
+                                            progress_callback.emit(int(min(progress, 100)))
+                                            
+                                except multiprocessing.TimeoutError:
+                                    logger.error(f"Timeout khi xử lý task #{idx+1}")
+                                except Exception as e:
+                                    logger.error(f"Lỗi khi lấy kết quả từ task #{idx+1}: {e}")
                             
                             # Cập nhật số lượng truyện đã xử lý
-                            batch_comics_count = len(valid_results)
+                            batch_comics_count = len(results)
                             comics_count += batch_comics_count
                             
-                            # Cập nhật biến đếm shared
-                            with self.processed_comics.get_lock():
-                                self.processed_comics.value += batch_comics_count
-                            
                             logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
-                            
-                            # Cập nhật tiến độ
-                            if progress_callback and len(raw_comics) > 0:
-                                progress = 25 + (self.processed_comics.value / len(raw_comics)) * 75
-                                progress_callback.emit(int(min(progress, 100)))
                             
                         except Exception as e:
                             logger.error(f"Lỗi khi xử lý map trong pool: {e}")

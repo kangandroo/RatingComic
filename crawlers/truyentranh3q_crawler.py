@@ -19,6 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException, StaleElementReferenceException
 from utils.sqlite_helper import SQLiteHelper
 from datetime import datetime, timedelta
+from tempfile import mkdtemp
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,9 @@ def init_process():
 def process_comic_worker(params):
     """Hàm để xử lý một truyện trong một process riêng biệt"""
     comic, db_path, base_url, worker_id = params
-    
+
+    time.sleep(random.uniform(1, 3) * (worker_id % 5 + 1) / 5)
+
     driver = None
     sqlite_helper = None
     
@@ -113,7 +116,6 @@ def process_comic_worker(params):
                 logger.error(f"Worker {worker_id}: Không thể tạo driver: {e}")
                 return None
             
-            # Xử lý truyện
             try:
                 comic_url = comic["link_truyen"]
                 logger.debug(f"Worker {worker_id}: Đang crawl chi tiết truyện: {comic_url}")
@@ -357,18 +359,21 @@ def create_chrome_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-accelerated-2d-canvas")
-
+    chrome_options.add_argument("--disable-accelerated-video-decode")
+    chrome_options.add_argument("--disable-accelerated-video-encode")
+    chrome_options.add_argument("--disable-gpu-compositing")
+    chrome_options.add_argument("--disable-webgl")
+    chrome_options.add_argument("--disable-webrtc-hw-encoding")
+    chrome_options.add_argument("--disable-webrtc-hw-decoding")
+    chrome_options.add_argument("--disable-gl-drawing-for-tests")
     chrome_options.add_argument("--disable-usb") 
     chrome_options.add_argument("--disable-features=WebUSB,UsbChooserUI")
-    
-    # Giảm tài nguyên tiêu thụ
     chrome_options.add_argument("--memory-model=low")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-web-security")
     chrome_options.add_argument("--disable-popup-blocking")
-    
-    # Bỏ qua cảnh báo automation
+    chrome_options.add_argument(f'--user-data-dir={mkdtemp()}')
     chrome_options.add_experimental_option('excludeSwitches', ["enable-automation", "enable-logging"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
@@ -424,7 +429,7 @@ class Truyentranh3qCrawler(BaseCrawler):
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
-        available_workers = max(1, min(cpu_count - 1, worker_count))
+        available_workers = max(1, worker_count)
         self.worker_count = min(available_workers, MAX_DRIVER_INSTANCES)
         logger.info(f"Khởi tạo với {self.worker_count} workers (Từ {worker_count} yêu cầu, {cpu_count} CPU)")
         
@@ -450,17 +455,15 @@ class Truyentranh3qCrawler(BaseCrawler):
         driver = None
         
         try:
-            # Số trang tối đa
             max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10  
             
-            # Khởi tạo driver riêng cho việc thu thập danh sách truyện
             driver = create_chrome_driver()
             
             # Duyệt qua từng trang
             while page_num <= max_pages:
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng trước khi tải trang tiếp theo")
-                    time.sleep(5)  # Đợi hệ thống phục hồi
+                    time.sleep(5)
                 
                 try:
                     # Sử dụng URL đã cung cấp
@@ -587,15 +590,12 @@ class Truyentranh3qCrawler(BaseCrawler):
         comics_count = 0
         
         try:
-            # Đảm bảo multiprocessing hoạt động đúng trên các nền tảng khác nhau
             if not hasattr(multiprocessing, 'get_start_method') or multiprocessing.get_start_method() != 'spawn':
                 try:
                     multiprocessing.set_start_method('spawn', force=True)
                 except RuntimeError:
-                    # Đã đặt ở một nơi khác, bỏ qua
                     pass
             
-            # Đặt nguồn dữ liệu
             self.db_manager.set_source("Truyentranh3q")
             
             # Lấy danh sách truyện
@@ -609,13 +609,12 @@ class Truyentranh3qCrawler(BaseCrawler):
                 return {"count": 0, "time_taken": time.time() - start_time, "website": "Truyentranh3q"}
             
             # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
-            batch_size = min(100, len(raw_comics))
+            batch_size = min(50, len(raw_comics))
             
             for i in range(0, len(raw_comics), batch_size):
-                # Kiểm tra tài nguyên hệ thống trước khi bắt đầu batch mới
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng để phục hồi")
-                    time.sleep(10)  # Đợi hệ thống phục hồi
+                    time.sleep(10) 
                 
                 batch = raw_comics[i:i+batch_size]
                 logger.info(f"Xử lý batch {i//batch_size + 1}/{(len(raw_comics)-1)//batch_size + 1} ({len(batch)} truyện)")
@@ -625,14 +624,13 @@ class Truyentranh3qCrawler(BaseCrawler):
                 
                 # Tạo và quản lý pool processes
                 try:
-                    dynamic_worker_count = min(self.worker_count, max(1, psutil.cpu_count(logical=False) - 1))
+                    dynamic_worker_count = max(self.worker_count, 1)
                     
                     with Pool(processes=dynamic_worker_count, initializer=init_process, maxtasksperchild=1) as pool:
                         try:
                             # Sử dụng map thay vì map_async để đơn giản hóa
                             results = pool.map(process_comic_worker, worker_params, chunksize=1)
                             
-                            # Lọc ra các kết quả không None
                             valid_results = [r for r in results if r is not None]
                             
                             # Cập nhật số lượng truyện đã xử lý

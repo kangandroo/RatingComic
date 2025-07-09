@@ -5,14 +5,20 @@ import multiprocessing
 import subprocess
 from pathlib import Path
 
-# Đơn giản hóa xử lý multiprocessing
+# Đơn giản hóa xử lý multiprocessing - DI CHUYỂN LÊN TRƯỚC KHI IMPORT PYQT6
 if hasattr(sys, 'frozen'):
     multiprocessing.freeze_support()
     
-    if sys.platform.startswith('win'):
-        if multiprocessing.get_start_method(allow_none=True) != 'spawn':
-            multiprocessing.set_start_method('spawn', force=True)
+if sys.platform.startswith('win'):
+    # Đảm bảo sử dụng spawn method trên Windows
+    if multiprocessing.get_start_method(allow_none=True) != 'spawn':
+        multiprocessing.set_start_method('spawn', force=True)
 
+# Thiết lập biến môi trường Qt trước khi import PyQt6
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''
+os.environ['QT_PLUGIN_PATH'] = ''
+
+# Import PyQt6 SAU KHI đã thiết lập multiprocessing
 from PyQt6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 from utils.config_manager import ConfigManager
@@ -82,4 +88,6 @@ if __name__ == "__main__":
         sys.exit(app.exec())
     except Exception as e:
         logger.error(f"Lỗi khi khởi động ứng dụng: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         sys.exit(1)

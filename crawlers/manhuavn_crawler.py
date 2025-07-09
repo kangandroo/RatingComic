@@ -19,6 +19,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException, StaleElementReferenceException
 from utils.sqlite_helper import SQLiteHelper
+from tempfile import mkdtemp
+
+import platform
+
+def is_amd_cpu():
+    """Kiểm tra xem CPU có phải AMD không"""
+    return "amd" in platform.processor().lower()
 
 # Thiết lập logging
 logger = logging.getLogger(__name__)
@@ -88,6 +95,8 @@ def process_comic_worker(params):
     """Hàm để xử lý một truyện trong một process riêng biệt"""
     comic, db_path, base_url, worker_id = params
     
+    time.sleep(random.uniform(1, 3)*(worker_id % 5 + 1) / 5)
+
     driver = None
     sqlite_helper = None
     
@@ -326,46 +335,69 @@ def extract_number(text_value):
         return 0
 
 def setup_driver():
-    """Cấu hình Chrome WebDriver tối ưu"""
+    """Cấu hình Chrome WebDriver tối ưu cho cả AMD và Intel"""
     chrome_options = Options()
     
-    # Chạy chế độ headless nếu không cần giao diện
-    chrome_options.add_argument("--headless")  
+    is_amd = is_amd_cpu()
+    if is_amd:
+        logger.info("Phát hiện CPU AMD: Áp dụng cấu hình đặc biệt")
     
-    # Tắt các tính năng không cần thiết
+    chrome_options.add_argument("--headless")  
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
+    
+    # Tắt các tính năng phụ thuộc vào phần cứng trên AMD
+    if is_amd:
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-accelerated-2d-canvas")
+        chrome_options.add_argument("--disable-accelerated-video-decode")
+        chrome_options.add_argument("--disable-accelerated-video-encode")
+        chrome_options.add_argument("--disable-gpu-compositing")
+        chrome_options.add_argument("--disable-webgl")
+        chrome_options.add_argument("--disable-webrtc-hw-encoding")
+        chrome_options.add_argument("--disable-webrtc-hw-decoding")
+    else:
+        # Chỉ tắt GPU cơ bản trên Intel
+        chrome_options.add_argument("--disable-gpu")
 
     chrome_options.add_argument("--disable-usb") 
     chrome_options.add_argument("--disable-features=WebUSB,UsbChooserUI")
-    
-    # Giảm tài nguyên tiêu thụ
     chrome_options.add_argument("--memory-model=low")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-web-security")
     chrome_options.add_argument("--disable-popup-blocking")
     
-    # Bỏ qua cảnh báo automation
     chrome_options.add_experimental_option('excludeSwitches', ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    if is_amd:
+        prefs = {
+            'profile.default_content_settings.images': 2,  # Tắt tải hình ảnh
+            'hardware_acceleration_mode.enabled': False,
+            'profile.hardware_acceleration_enabled': False,
+        }
+        chrome_options.add_experimental_option('prefs', prefs)
 
-    # Vô hiệu hóa logging để tránh crash
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
     os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
     os.environ['TF_USE_LEGACY_CPU'] = '0'
     os.environ['TF_DISABLE_MKL'] = '1'
     os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
+    
+    if is_amd:
+        os.environ['OPENBLAS_TARGET_ARCH'] = 'CORE2'  
+        os.environ['MKL_DEBUG_CPU_TYPE'] = '5'
 
     try:
         service = Service(log_path=os.devnull)  
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         # Thêm timeout
-        driver.set_page_load_timeout(DEFAULT_TIMEOUT)
-        driver.set_script_timeout(DEFAULT_TIMEOUT)
+        timeout_seconds = 45 if is_amd else DEFAULT_TIMEOUT  # Tăng timeout cho AMD
+        driver.set_page_load_timeout(timeout_seconds)
+        driver.set_script_timeout(timeout_seconds)
         return driver
     except Exception as e:
         logger.error(f"Lỗi khi khởi tạo Chrome driver: {e}")
@@ -467,7 +499,7 @@ class ManhuavnCrawler(BaseCrawler):
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
-        available_workers = max(1, min(cpu_count - 1, worker_count))
+        available_workers = max(1, worker_count)
         self.worker_count = min(available_workers, MAX_DRIVER_INSTANCES)
         logger.info(f"Khởi tạo với {self.worker_count} workers (Từ {worker_count} yêu cầu, {cpu_count} CPU)")
         
@@ -489,15 +521,13 @@ class ManhuavnCrawler(BaseCrawler):
         comics_count = 0
         
         try:
-            # Đảm bảo multiprocessing hoạt động đúng trên các nền tảng khác nhau
+            is_amd = is_amd_cpu()
             if not hasattr(multiprocessing, 'get_start_method') or multiprocessing.get_start_method() != 'spawn':
                 try:
                     multiprocessing.set_start_method('spawn', force=True)
                 except RuntimeError:
-                    # Đã đặt ở một nơi khác, bỏ qua
                     pass
             
-            # Lấy danh sách truyện (sử dụng driver riêng)
             driver = None
             raw_comics = []
             
@@ -509,7 +539,7 @@ class ManhuavnCrawler(BaseCrawler):
             except Exception as e:
                 logger.error(f"Lỗi khi lấy danh sách truyện: {e}")
                 if not raw_comics:
-                    raise  # Không có dữ liệu để xử lý, kết thúc
+                    raise  
             finally:
                 if driver:
                     try:
@@ -517,19 +547,17 @@ class ManhuavnCrawler(BaseCrawler):
                     except:
                         pass
             
-            # Nếu không lấy được truyện nào, kết thúc
             if not raw_comics:
                 logger.warning("Không lấy được truyện nào, kết thúc quá trình crawl")
                 return {"count": 0, "time_taken": time.time() - start_time, "website": "Manhuavn"}
                 
-            # Xử lý theo batch để kiểm soát tài nguyên tốt hơn
-            batch_size = min(100, len(raw_comics))  # Giảm kích thước batch
+            batch_size = min(50, len(raw_comics))  
             
             for i in range(0, len(raw_comics), batch_size):
                 # Kiểm tra tài nguyên hệ thống trước khi bắt đầu batch mới
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng để phục hồi")
-                    time.sleep(10)  # Đợi hệ thống phục hồi
+                    time.sleep(10)  
                 
                 batch = raw_comics[i:i+batch_size]
                 logger.info(f"Xử lý batch {i//batch_size + 1}/{(len(raw_comics)-1)//batch_size + 1} ({len(batch)} truyện)")
@@ -540,30 +568,47 @@ class ManhuavnCrawler(BaseCrawler):
                 # Tạo và quản lý pool processes
                 try:
                     # Số lượng process động dựa trên tình trạng hệ thống
-                    dynamic_worker_count = min(self.worker_count, max(1, psutil.cpu_count(logical=False) - 1))
+                    dynamic_worker_count = max(self.worker_count, 1)
                     
                     with Pool(processes=dynamic_worker_count, initializer=init_process, maxtasksperchild=3) as pool:
                         try:
-                            # Sử dụng map thay vì map_async để đơn giản hóa
-                            results = pool.map(process_comic_worker, worker_params, chunksize=1)
+                            result_objects = []
                             
-                            # Lọc ra các kết quả không None
-                            valid_results = [r for r in results if r is not None]
+                            for idx, param in enumerate(worker_params):
+                                if idx > 0:
+                                    delay = random.uniform(2.0, 4.0) if is_amd else random.uniform(0.5, 1.5)
+                                    # logger.info(f"Đợi {delay:.2f}s trước khi khởi tạo process #{idx+1}")
+                                    time.sleep(delay)
+                                
+                                result_obj = pool.apply_async(process_comic_worker, (param,))
+                                result_objects.append(result_obj)
+                            
+                            results = []
+                            for idx, result_obj in enumerate(result_objects):
+                                try:
+                                    timeout_seconds = 180
+                                    result = result_obj.get(timeout=timeout_seconds)
+                                    if result is not None:
+                                        results.append(result)
+                                        
+                                        # Cập nhật tiến độ từng phần
+                                        with self.processed_comics.get_lock():
+                                            self.processed_comics.value += 1
+                                            
+                                        if progress_callback and len(raw_comics) > 0:
+                                            progress = (self.processed_comics.value / len(raw_comics)) * 100
+                                            progress_callback.emit(int(min(progress, 100)))
+                                            
+                                except multiprocessing.TimeoutError:
+                                    logger.error(f"Timeout khi xử lý task #{idx+1}")
+                                except Exception as e:
+                                    logger.error(f"Lỗi khi lấy kết quả từ task #{idx+1}: {e}")
                             
                             # Cập nhật số lượng truyện đã xử lý
-                            batch_comics_count = len(valid_results)
+                            batch_comics_count = len(results)
                             comics_count += batch_comics_count
                             
-                            # Cập nhật biến đếm shared
-                            with self.processed_comics.get_lock():
-                                self.processed_comics.value += batch_comics_count
-                            
                             logger.info(f"Kết thúc batch {i//batch_size + 1}: Đã xử lý {batch_comics_count}/{len(batch)} truyện trong batch")
-                            
-                            # Cập nhật tiến độ
-                            if progress_callback and len(raw_comics) > 0:
-                                progress = (self.processed_comics.value / len(raw_comics)) * 100
-                                progress_callback.emit(int(min(progress, 100)))
                             
                         except Exception as e:
                             logger.error(f"Lỗi khi xử lý map trong pool: {e}")
@@ -752,13 +797,6 @@ class ManhuavnCrawler(BaseCrawler):
             load_more_attempts = 0
             stop_loading = False
             max_load_attempts = 20  
-            
-            # Kiểm tra xem trang có load thành công không
-            page_source = driver.page_source.lower()
-            if "không tìm thấy" in page_source or "not found" in page_source or "404" in page_source:
-                logger.error(f"Trang không tồn tại hoặc bị lỗi 404: {link}")
-                driver.quit()
-                return []
             
             while load_more_attempts < max_load_attempts and not stop_loading:
                 try:
