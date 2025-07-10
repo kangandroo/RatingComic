@@ -7,6 +7,10 @@ import gc
 import signal
 import psutil
 import multiprocessing
+import socket
+import subprocess
+import shutil
+import sys
 from multiprocessing import Pool, Value, current_process
 from functools import wraps
 from datetime import datetime, timedelta
@@ -74,6 +78,124 @@ def setup_signal_handlers():
             logger.info(f"Process {current_process().name} nhận tín hiệu SIGTERM. Đang dọn dẹp...")
             sys.exit(0)
         signal.signal(signal.SIGTERM, handle_sigterm)
+
+# Chrome process management utilities
+def find_available_port(start_port=9222, max_attempts=100):
+    """Tìm port có sẵn cho Chrome debug port"""
+    for i in range(max_attempts):
+        port = start_port + i
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"Không tìm thấy port khả dụng trong khoảng {start_port}-{start_port + max_attempts}")
+
+def cleanup_chrome_processes():
+    """Dọn dẹp các tiến trình Chrome cũ có thể gây xung đột"""
+    terminated_count = 0
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if not proc.is_running():
+                    continue
+                    
+                proc_name = proc.info['name'].lower() if proc.info['name'] else ''
+                cmdline = proc.info['cmdline'] if proc.info['cmdline'] else []
+                cmdline_str = ' '.join(cmdline).lower()
+                
+                # Tìm Chrome processes liên quan đến automation
+                if ('chrome' in proc_name or 'chromium' in proc_name) and any(
+                    keyword in cmdline_str for keyword in [
+                        '--remote-debugging-port', 
+                        '--automation', 
+                        '--headless',
+                        '--no-sandbox',
+                        'webdriver',
+                        'chromedriver'
+                    ]
+                ):
+                    logger.info(f"Dọn dẹp Chrome process: PID {proc.info['pid']}")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except psutil.TimeoutExpired:
+                        proc.kill()
+                    terminated_count += 1
+                    
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+                
+        # Đợi một chút để processes kết thúc hoàn toàn
+        if terminated_count > 0:
+            time.sleep(2)
+            logger.info(f"Đã dọn dẹp {terminated_count} Chrome processes")
+            
+    except Exception as e:
+        logger.warning(f"Lỗi khi dọn dẹp Chrome processes: {e}")
+    
+    return terminated_count
+
+def kill_chromedriver_processes():
+    """Dọn dẹp các tiến trình chromedriver"""
+    terminated_count = 0
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if not proc.is_running():
+                    continue
+                    
+                proc_name = proc.info['name'].lower() if proc.info['name'] else ''
+                if 'chromedriver' in proc_name:
+                    logger.info(f"Dọn dẹp chromedriver process: PID {proc.info['pid']}")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        proc.kill()
+                    terminated_count += 1
+                    
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+                
+        if terminated_count > 0:
+            time.sleep(1)
+            logger.info(f"Đã dọn dẹp {terminated_count} chromedriver processes")
+            
+    except Exception as e:
+        logger.warning(f"Lỗi khi dọn dẹp chromedriver processes: {e}")
+    
+    return terminated_count
+
+def cleanup_chrome_temp_dirs():
+    """Dọn dẹp các thư mục temp của Chrome"""
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    cleaned_count = 0
+    
+    try:
+        # Tìm và xóa các thư mục Chrome temp
+        for item in os.listdir(temp_dir):
+            if item.startswith(('scoped_dir', 'chrome_', '.com.google.Chrome', 'tmp')):
+                item_path = os.path.join(temp_dir, item)
+                try:
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                        cleaned_count += 1
+                    elif os.path.isfile(item_path):
+                        os.remove(item_path)
+                        cleaned_count += 1
+                except Exception:
+                    continue  # Bỏ qua lỗi individual cleanup
+                    
+        if cleaned_count > 0:
+            logger.info(f"Đã dọn dẹp {cleaned_count} Chrome temp files/dirs")
+            
+    except Exception as e:
+        logger.warning(f"Lỗi khi dọn dẹp Chrome temp dirs: {e}")
+    
+    return cleaned_count
 
 # Hàm khởi tạo riêng cho mỗi process
 def init_process():
@@ -161,39 +283,170 @@ def process_comic_worker(params):
                 pass
 
 def setup_driver():
-    """Tạo và cấu hình SeleniumBase Driver để bypass Cloudflare"""
+    """Tạo và cấu hình Driver với quản lý tài nguyên và port tốt hơn"""
+    driver = None
+    max_retries = 3
+    
+    # Dọn dẹp tài nguyên trước khi tạo driver mới
+    logger.info("Dọn dẹp tài nguyên Chrome trước khi tạo driver...")
+    cleanup_chrome_processes()
+    kill_chromedriver_processes()
+    cleanup_chrome_temp_dirs()
+    
+    # Thiết lập biến môi trường
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+    os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
+    os.environ['TF_USE_LEGACY_CPU'] = '0'
+    os.environ['TF_DISABLE_MKL'] = '1'
+    os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
+    
+    # Try xvfb display
+    os.environ['DISPLAY'] = ':99'
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Thử tạo driver, lần thử {attempt + 1}/{max_retries}")
+            
+            # Phương thức 1: Raw Selenium with explicit Chrome options
+            if attempt == 0:
+                try:
+                    logger.info("Method 1: Raw Selenium WebDriver với Chrome options")
+                    from selenium import webdriver
+                    from selenium.webdriver.chrome.options import Options
+                    from selenium.webdriver.chrome.service import Service
+                    
+                    # Tìm port khả dụng cho Chrome debug port  
+                    debug_port = find_available_port(start_port=9222 + (attempt * 100))
+                    user_data_dir = mkdtemp(prefix=f"chrome_user_data_{debug_port}_")
+                    
+                    chrome_options = Options()
+                    chrome_options.add_argument("--headless=new")
+                    chrome_options.add_argument("--no-sandbox")
+                    chrome_options.add_argument("--disable-dev-shm-usage")
+                    chrome_options.add_argument("--disable-gpu")
+                    chrome_options.add_argument("--disable-web-security")
+                    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+                    chrome_options.add_argument("--disable-extensions")
+                    chrome_options.add_argument("--disable-plugins")
+                    chrome_options.add_argument("--disable-images")
+                    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+                    chrome_options.add_argument(f"--remote-debugging-port={debug_port}")
+                    chrome_options.add_argument("--window-size=1920,1080")
+                    chrome_options.add_argument("--single-process")
+                    chrome_options.add_argument("--disable-background-timer-throttling")
+                    chrome_options.add_argument("--disable-renderer-backgrounding")
+                    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+                    
+                    # Set prefs to disable images and other resources
+                    prefs = {
+                        "profile.managed_default_content_settings.images": 2,
+                        "profile.default_content_setting_values.notifications": 2,
+                        "profile.default_content_settings.popups": 0
+                    }
+                    chrome_options.add_experimental_option("prefs", prefs)
+                    
+                    # Create service
+                    service = Service()
+                    
+                    # Create driver with timeout
+                    driver = webdriver.Chrome(service=service, options=chrome_options)
+                    logger.info(f"Raw Selenium driver tạo thành công (port {debug_port})")
+                    break
+                    
+                except Exception as e:
+                    logger.warning(f"Method 1 (Raw Selenium) thất bại: {e}")
+                    if driver:
+                        try:
+                            driver.quit()
+                        except:
+                            pass
+                        driver = None
+            
+            # Phương thức 2: SeleniumBase Driver với user data dir
+            elif attempt == 1:
+                try:
+                    logger.info("Method 2: SeleniumBase Driver với user data dir")
+                    user_data_dir = mkdtemp(prefix=f"chrome_user_data_sb_{attempt}_")
+                    driver = Driver(
+                        browser="chrome",
+                        headless=True,
+                        no_sandbox=True,
+                        user_data_dir=user_data_dir
+                    )
+                    logger.info("SeleniumBase driver tạo thành công")
+                    break
+                except Exception as e:
+                    logger.warning(f"Method 2 (SeleniumBase + user_data_dir) thất bại: {e}")
+                    if driver:
+                        try:
+                            driver.quit()
+                        except:
+                            pass
+                        driver = None
+            
+            # Phương thức 3: SeleniumBase Driver tối thiểu
+            else:
+                try:
+                    logger.info("Method 3: SeleniumBase Driver tối thiểu")
+                    driver = Driver(
+                        browser="chrome",
+                        headless=True,
+                        no_sandbox=True
+                    )
+                    logger.info("SeleniumBase minimal driver tạo thành công")
+                    break
+                except Exception as e:
+                    logger.warning(f"Method 3 (SeleniumBase minimal) thất bại: {e}")
+                    if driver:
+                        try:
+                            driver.quit()
+                        except:
+                            pass
+                        driver = None
+                        
+        except Exception as e:
+            logger.error(f"Lỗi không mong đợi khi tạo driver (attempt {attempt + 1}): {e}")
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = None
+        
+        # Đợi trước khi thử lại
+        if driver is None and attempt < max_retries - 1:
+            wait_time = 2 ** attempt  # Exponential backoff
+            logger.info(f"Đợi {wait_time} giây trước khi thử lại...")
+            time.sleep(wait_time)
+            
+            # Dọn dẹp lại trước khi thử lần tiếp theo
+            cleanup_chrome_processes()
+            kill_chromedriver_processes()
+    
+    if driver is None:
+        logger.critical("Không thể tạo driver sau tất cả các phương thức thử")
+        raise RuntimeError("Không thể khởi tạo Chrome driver sau 3 lần thử với các phương thức khác nhau")
+    
     try:
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-        os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-        os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'
-        os.environ['TF_USE_LEGACY_CPU'] = '0'
-        os.environ['TF_DISABLE_MKL'] = '1'
-        os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning,ignore::UserWarning'
-        
-        from seleniumbase import Driver
-        
-        driver = Driver(
-            browser="chrome",   
-            uc=True,           
-            headless=True,      
-            no_sandbox=True
-        )
-        
-        # Thiết lập các timeout sau khi tạo driver
+        # Thiết lập các timeout sau khi tạo driver thành công
         driver.implicitly_wait(5)
         driver.set_page_load_timeout(DEFAULT_TIMEOUT)
         driver.set_script_timeout(DEFAULT_TIMEOUT)
         
+        # Test driver bằng cách điều hướng đến trang trống
+        driver.get("about:blank")
+        logger.info("Driver đã được thiết lập và kiểm tra thành công")
+        
         return driver
         
     except Exception as e:
-        logger.error(f"Lỗi khi khởi tạo SeleniumBase driver: {e}")
+        logger.error(f"Lỗi khi thiết lập driver sau khi tạo: {e}")
         try:
-            # Fallback với ít tùy chọn hơn
-            return Driver(browser="chrome", headless=True, no_sandbox=True)
-        except Exception as e2:
-            logger.critical(f"Lỗi nghiêm trọng khi khởi tạo SeleniumBase driver: {e2}")
-            raise RuntimeError(f"Không thể khởi tạo SeleniumBase driver: {e2}")
+            driver.quit()
+        except:
+            pass
+        raise RuntimeError(f"Driver được tạo nhưng không thể thiết lập: {e}")
 
 def get_text_safe(element, selector, default="N/A"):
     """Lấy text an toàn từ phần tử"""
