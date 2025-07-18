@@ -50,7 +50,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    uac_admin=True,  # This is another way to request admin privileges
+    uac_admin=True,
     manifest='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">\n<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">\n    <security>\n    <requestedPrivileges>\n        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>\n    </requestedPrivileges>\n    </security>\n</trustInfo>\n</assembly>\n',
 )
 coll = COLLECT(

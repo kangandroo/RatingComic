@@ -40,7 +40,8 @@ class WebsiteTab(QWidget):
         self.batch_timer = QTimer(self)
         self.batch_timer.timeout.connect(self.process_next_batch)
         self.rating_results = {} 
-        
+        self.current_worker = None        
+
         # Thiết lập UI
         self.init_ui()
         
@@ -867,6 +868,7 @@ class WebsiteTab(QWidget):
         self.crawl_button.setText("Đang crawl...")
         self.crawl_button.setEnabled(False)
         self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
         
         # Tạo crawler
         crawler = CrawlerFactory.create_crawler(
@@ -882,11 +884,20 @@ class WebsiteTab(QWidget):
         worker.signals.progress.connect(self.update_progress)
         worker.signals.result.connect(self.on_crawl_complete)
         worker.signals.error.connect(self.on_crawl_error)
+        worker.signals.finished.connect(self.on_worker_finished)
         
+        self.current_worker = worker
+
         # Bắt đầu crawl
         logger.info(f"Bắt đầu crawl từ {website} với {max_pages} trang và {worker_count} worker")
         QThreadPool.globalInstance().start(worker)
     
+    def on_worker_finished(self):
+        """Reset worker state and re-enable crawl button when done"""
+        # logger.info("Worker finished")
+        self.current_worker = None
+        self.crawl_button.setEnabled(True)
+
     @pyqtSlot(int)
     def update_progress(self, progress):
         """
