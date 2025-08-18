@@ -61,7 +61,7 @@ class CrawlerFactory:
             return NetTruyenCrawler(
                 db_manager,
                 config_manager,
-                base_url=kwargs.get('base_url', supported_websites.get('NetTruyen', 'https://nettruyenvio.com')),
+                base_url=kwargs.get('base_url', supported_websites.get('NetTruyen', 'https://nettruyenvia.com')),
                 max_pages=kwargs.get('max_pages', config_manager.get('max_pages', 10)),
                 worker_count=kwargs.get('worker_count', config_manager.get('worker_count', 5))
             )

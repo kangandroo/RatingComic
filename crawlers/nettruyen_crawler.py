@@ -508,11 +508,11 @@ def parse_relative_time(time_text):
 class NetTruyenCrawler(BaseCrawler):
     """Crawler cho website NetTruyen sử dụng SeleniumBase và multiprocessing"""
     
-    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvio.com", max_pages=None, worker_count=5):
+    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvia.com", max_pages=None, worker_count=5):
         super().__init__(db_manager, config_manager)
         
         # Đặt base_url từ tham số hoặc giá trị mặc định
-        self.base_url = base_url if base_url else "https://nettruyenvio.com"
+        self.base_url = base_url if base_url else "https://nettruyenvia.com"
         self.max_pages = max_pages
         
         # Giới hạn số lượng worker dựa trên CPU và RAM

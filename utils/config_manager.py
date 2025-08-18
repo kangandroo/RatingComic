@@ -39,7 +39,7 @@ class ConfigManager:
             "worker_count": 5,  # Số worker cho multi-threading
             "supported_websites": {
                 "TruyenQQ": "https://truyenqqgo.com",
-                "NetTruyen": "https://nettruyenvio.com",
+                "NetTruyen": "https://nettruyenvia.com",
                 "Manhuavn": "https://manhuavn.top",
                 "Truyentranh3q": "https://truyentranh3q.com"
             },
