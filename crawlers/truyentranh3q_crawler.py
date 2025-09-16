@@ -420,12 +420,18 @@ def create_chrome_driver():
 class Truyentranh3qCrawler(BaseCrawler):
     """Crawler cho trang Truyentranh3q sử dụng multiprocessing"""
     
-    def __init__(self, db_manager, config_manager, base_url=None, max_pages=None, worker_count=5):
+    def __init__(self, db_manager, config_manager, base_url=None, max_pages=None, worker_count=5, start_page=1, end_page=None):
         super().__init__(db_manager, config_manager)
         
         # Đặt base_url từ tham số hoặc giá trị mặc định
         self.base_url = base_url if base_url else "https://Truyentranh3q.com"
         self.max_pages = max_pages
+        self.start_page = start_page
+        self.end_page = end_page
+        
+        # Nếu không có end_page, tính từ start_page và max_pages
+        if self.end_page is None and self.max_pages:
+            self.end_page = self.start_page + self.max_pages - 1
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
@@ -451,16 +457,25 @@ class Truyentranh3qCrawler(BaseCrawler):
     def get_comic_listings(self, max_pages=None, progress_callback=None):
         """Lấy danh sách truyện từ các trang danh sách"""
         all_comics = []
-        page_num = 1
         driver = None
         
         try:
-            max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10  
+            # Sử dụng start_page và end_page nếu có, ngược lại dùng max_pages
+            if self.start_page and self.end_page:
+                start_page = self.start_page
+                end_page = self.end_page
+                logger.info(f"Sử dụng phạm vi trang từ {start_page} đến {end_page}")
+            else:
+                # Logic cũ để tương thích
+                max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10
+                start_page = 1
+                end_page = max_pages
+                logger.info(f"Sử dụng logic cũ: crawl {max_pages} trang từ trang 1")
             
             driver = create_chrome_driver()
             
-            # Duyệt qua từng trang
-            while page_num <= max_pages:
+            # Duyệt qua từng trang trong phạm vi đã định
+            for page_num in range(start_page, end_page + 1):
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng trước khi tải trang tiếp theo")
                     time.sleep(5)
@@ -542,12 +557,11 @@ class Truyentranh3qCrawler(BaseCrawler):
                     logger.info(f"Trang {page_num}: Đã tìm thấy {len(page_stories)} truyện")
                     all_comics.extend(page_stories)
                     
-                    # Chuyển sang trang tiếp theo
-                    page_num += 1
-                    
                     # Cập nhật tiến trình
-                    if progress_callback and max_pages:
-                        progress = min(25, (page_num / max_pages) * 25)  # Giới hạn 25% cho giai đoạn crawl danh sách
+                    if progress_callback:
+                        total_pages = end_page - start_page + 1
+                        current_progress = (page_num - start_page + 1) / total_pages
+                        progress = min(25, current_progress * 25)  # Giới hạn 25% cho giai đoạn crawl danh sách
                         progress_callback.emit(int(progress))
                     
                     # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn
@@ -556,7 +570,7 @@ class Truyentranh3qCrawler(BaseCrawler):
                 except Exception as e:
                     logger.error(f"Lỗi khi truy cập trang {page_num}: {str(e)}")
                     time.sleep(random.uniform(3, 5))  # Thêm thời gian chờ trước khi thử trang tiếp theo
-                    page_num += 1  # Thử trang tiếp theo
+                    continue  # Tiếp tục với trang tiếp theo
                 
                 # Gọi garbage collector sau mỗi trang
                 gc.collect()

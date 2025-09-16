@@ -508,12 +508,18 @@ def parse_relative_time(time_text):
 class NetTruyenCrawler(BaseCrawler):
     """Crawler cho website NetTruyen sử dụng SeleniumBase và multiprocessing"""
     
-    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvia.com", max_pages=None, worker_count=5):
+    def __init__(self, db_manager, config_manager, base_url="https://nettruyenvia.com", max_pages=None, worker_count=5, start_page=1, end_page=None):
         super().__init__(db_manager, config_manager)
         
         # Đặt base_url từ tham số hoặc giá trị mặc định
         self.base_url = base_url if base_url else "https://nettruyenvia.com"
         self.max_pages = max_pages
+        self.start_page = start_page
+        self.end_page = end_page
+        
+        # Nếu không có end_page, tính từ start_page và max_pages
+        if self.end_page is None and self.max_pages:
+            self.end_page = self.start_page + self.max_pages - 1
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
@@ -656,17 +662,25 @@ class NetTruyenCrawler(BaseCrawler):
     def get_all_stories(self, driver, max_pages=None, progress_callback=None):
         """Lấy danh sách truyện từ nhiều trang"""
         stories = []
-        page = 1
         
         try:
-            # Giới hạn số trang nếu không được chỉ định
-            if max_pages is None:
-                max_pages = 10  # Giá trị mặc định an toàn
+            # Sử dụng start_page và end_page nếu có, ngược lại dùng max_pages
+            if self.start_page and self.end_page:
+                start_page = self.start_page
+                end_page = self.end_page
+                logger.info(f"Sử dụng phạm vi trang từ {start_page} đến {end_page}")
+            else:
+                # Logic cũ để tương thích
+                max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10
+                start_page = 1
+                end_page = max_pages
+                logger.info(f"Sử dụng logic cũ: crawl {max_pages} trang từ trang 1")
             
             # Bypass Cloudflare trước tiên
             bypass_cloudflare(driver, self.base_url)
             
-            while page <= max_pages:
+            # Duyệt qua từng trang trong phạm vi đã định
+            for page in range(start_page, end_page + 1):
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng trước khi tải trang tiếp theo")
                     time.sleep(5)  # Đợi hệ thống phục hồi
@@ -683,7 +697,7 @@ class NetTruyenCrawler(BaseCrawler):
                     try:
                         driver.get(url)
                     except:
-                        break
+                        continue  # Tiếp tục với trang tiếp theo
                         
                 time.sleep(random.uniform(2, 4))
 
@@ -736,11 +750,12 @@ class NetTruyenCrawler(BaseCrawler):
                         continue
 
                 # Cập nhật tiến độ
-                if progress_callback and max_pages:
-                    progress = min(25, (page / max_pages) * 25)  # Chỉ chiếm 25% đầu tiên
+                if progress_callback:
+                    total_pages = end_page - start_page + 1
+                    current_progress = (page - start_page + 1) / total_pages
+                    progress = min(25, current_progress * 25)  # Chỉ chiếm 25% đầu tiên
                     progress_callback.emit(int(progress))
 
-                page += 1
                 time.sleep(random.uniform(2, 3))
                 
         except Exception as e:

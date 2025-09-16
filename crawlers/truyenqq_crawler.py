@@ -431,12 +431,18 @@ def create_chrome_driver():
 class TruyenQQCrawler(BaseCrawler):
     """Crawler cho trang TruyenQQ sử dụng multiprocessing"""
     
-    def __init__(self, db_manager, config_manager, base_url=None, max_pages=None, worker_count=5):
+    def __init__(self, db_manager, config_manager, base_url=None, max_pages=None, worker_count=5, start_page=1, end_page=None):
         super().__init__(db_manager, config_manager)
         
         # Đặt base_url từ tham số hoặc giá trị mặc định
         self.base_url = base_url if base_url else "https://truyenqqgo.com"
         self.max_pages = max_pages
+        self.start_page = start_page
+        self.end_page = end_page
+        
+        # Nếu không có end_page, tính từ start_page và max_pages
+        if self.end_page is None and self.max_pages:
+            self.end_page = self.start_page + self.max_pages - 1
         
         # Giới hạn số lượng worker dựa trên CPU và RAM
         cpu_count = multiprocessing.cpu_count()
@@ -456,24 +462,32 @@ class TruyenQQCrawler(BaseCrawler):
         self.total_comics = 0
         self.processed_comics = Value('i', 0)
         
-        logger.info(f"Khởi tạo TruyenQQCrawler với base_url={self.base_url}")
+        logger.info(f"Khởi tạo TruyenQQCrawler với base_url={self.base_url}, start_page={self.start_page}, end_page={self.end_page}")
     
     @retry(max_retries=2)
     def get_comic_listings(self, max_pages=None, progress_callback=None):
         """Lấy danh sách truyện từ các trang danh sách"""
         all_comics = []
-        page_num = 1
         driver = None
         
         try:
-            # Số trang tối đa
-            max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10  # Giá trị mặc định an toàn
+            # Sử dụng start_page và end_page nếu có, ngược lại dùng max_pages
+            if self.start_page and self.end_page:
+                start_page = self.start_page
+                end_page = self.end_page
+                logger.info(f"Sử dụng phạm vi trang từ {start_page} đến {end_page}")
+            else:
+                # Số trang tối đa (logic cũ để tương thích)
+                max_pages = max_pages if max_pages else self.max_pages if self.max_pages else 10
+                start_page = 1
+                end_page = max_pages
+                logger.info(f"Sử dụng logic cũ: crawl {max_pages} trang từ trang 1")
             
             # Khởi tạo driver riêng cho việc thu thập danh sách truyện
             driver = create_chrome_driver()
             
-            # Duyệt qua từng trang
-            while page_num <= max_pages:
+            # Duyệt qua từng trang trong phạm vi đã định
+            for page_num in range(start_page, end_page + 1):
                 if not check_system_resources():
                     logger.warning("Tài nguyên hệ thống thấp, tạm dừng trước khi tải trang tiếp theo")
                     time.sleep(5)  # Đợi hệ thống phục hồi
@@ -497,7 +511,7 @@ class TruyenQQCrawler(BaseCrawler):
                             time.sleep(random.uniform(2, 4))
                     else:
                         logger.error(f"Không thể truy cập trang sau 3 lần thử: {url}")
-                        break
+                        continue  # Tiếp tục với trang tiếp theo thay vì break
                     
                     # Lấy danh sách các khối truyện
                     story_blocks = driver.find_elements(By.CSS_SELECTOR, ".list_grid_out ul.list_grid li")
@@ -552,12 +566,11 @@ class TruyenQQCrawler(BaseCrawler):
                     logger.info(f"Trang {page_num}: Đã tìm thấy {len(page_stories)} truyện")
                     all_comics.extend(page_stories)
                     
-                    # Chuyển sang trang tiếp theo
-                    page_num += 1
-                    
                     # Cập nhật tiến trình
-                    if progress_callback and max_pages:
-                        progress = min(25, (page_num / max_pages) * 25)  # Giới hạn 25% cho giai đoạn crawl danh sách
+                    if progress_callback:
+                        total_pages = end_page - start_page + 1
+                        current_progress = (page_num - start_page + 1) / total_pages
+                        progress = min(25, current_progress * 25)  # Giới hạn 25% cho giai đoạn crawl danh sách
                         progress_callback.emit(int(progress))
                     
                     # Nghỉ ngẫu nhiên giữa các yêu cầu để tránh bị chặn

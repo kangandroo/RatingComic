@@ -40,7 +40,11 @@ class WebsiteTab(QWidget):
         self.batch_timer = QTimer(self)
         self.batch_timer.timeout.connect(self.process_next_batch)
         self.rating_results = {} 
-        self.current_worker = None        
+        self.current_worker = None
+        
+        # Thêm biến cho trang bắt đầu và kết thúc
+        self.start_page_spin = None
+        self.end_page_spin = None        
 
         # Thiết lập UI
         self.init_ui()
@@ -75,13 +79,39 @@ class WebsiteTab(QWidget):
         
         # Pages option
         pages_layout = QVBoxLayout()
-        pages_label = QLabel("Số trang:")
+        pages_label = QLabel("Cài đặt trang:")
+        
+        # Trang bắt đầu
+        start_page_layout = QHBoxLayout()
+        start_page_label = QLabel("Trang bắt đầu:")
+        self.start_page_spin = QSpinBox()
+        self.start_page_spin.setRange(1, 1000000)
+        self.start_page_spin.setValue(self.config_manager.get("start_page", 1))
+        start_page_layout.addWidget(start_page_label)
+        start_page_layout.addWidget(self.start_page_spin)
+        
+        # Trang kết thúc
+        end_page_layout = QHBoxLayout()
+        end_page_label = QLabel("Trang kết thúc:")
+        self.end_page_spin = QSpinBox()
+        self.end_page_spin.setRange(1, 1000000)
+        self.end_page_spin.setValue(self.config_manager.get("end_page", 10))
+        end_page_layout.addWidget(end_page_label)
+        end_page_layout.addWidget(self.end_page_spin)
+        
+        # Thêm event để tự động cập nhật khi thay đổi
+        self.start_page_spin.valueChanged.connect(self.validate_page_range)
+        self.end_page_spin.valueChanged.connect(self.validate_page_range)
+        
+        pages_layout.addWidget(pages_label)
+        pages_layout.addLayout(start_page_layout)
+        pages_layout.addLayout(end_page_layout)
+        
+        # Giữ lại pages_spin cũ để tương thích với code cũ (ẩn đi)
         self.pages_spin = QSpinBox()
         self.pages_spin.setRange(1, 1000000)
         self.pages_spin.setValue(self.config_manager.get("max_pages", 10))
-        
-        pages_layout.addWidget(pages_label)
-        pages_layout.addWidget(self.pages_spin)
+        self.pages_spin.hide()  # Ẩn control cũ
         
         # Workers option
         workers_layout = QVBoxLayout()
@@ -194,6 +224,20 @@ class WebsiteTab(QWidget):
         
         # Enable drag and drop
         self.setAcceptDrops(True)
+    
+    def validate_page_range(self):
+        """Kiểm tra và điều chỉnh phạm vi trang"""
+        if self.start_page_spin and self.end_page_spin:
+            start_page = self.start_page_spin.value()
+            end_page = self.end_page_spin.value()
+            
+            # Đảm bảo trang bắt đầu không lớn hơn trang kết thúc
+            if start_page > end_page:
+                self.end_page_spin.setValue(start_page)
+            
+            # Cập nhật giá trị pages_spin cũ để tương thích
+            total_pages = end_page - start_page + 1
+            self.pages_spin.setValue(total_pages)
     
     def export_to_excel(self):
         """Xuất dữ liệu từ bảng kết quả ra file Excel"""
@@ -842,14 +886,17 @@ class WebsiteTab(QWidget):
         # Lấy website hiện tại
         website = self.website_combo.currentText()
         
-        # Lấy số trang và số worker
-        max_pages = self.pages_spin.value()
+        # Lấy thông tin trang
+        start_page = self.start_page_spin.value() if self.start_page_spin else 1
+        end_page = self.end_page_spin.value() if self.end_page_spin else self.pages_spin.value()
+        max_pages = end_page - start_page + 1
         worker_count = self.workers_spin.value()
         
         # Hiển thị thông báo xác nhận
         reply = QMessageBox.question(
             self, 'Xác nhận',
-            f'Bạn có chắc chắn muốn bắt đầu crawl từ {website} với {max_pages} trang không?',
+            f'Bạn có chắc chắn muốn bắt đầu crawl từ {website}\n'
+            f'Trang {start_page} đến {end_page} (tổng {max_pages} trang) không?',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
         )
@@ -875,6 +922,8 @@ class WebsiteTab(QWidget):
             website, 
             self.db_manager, 
             self.config_manager,
+            start_page=start_page,
+            end_page=end_page,
             max_pages=max_pages,
             worker_count=worker_count
         )
@@ -1006,6 +1055,12 @@ class WebsiteTab(QWidget):
     
     def closeEvent(self, event):
         """Xử lý khi tab bị đóng"""
+        # Lưu cấu hình trang
+        if self.start_page_spin and self.end_page_spin:
+            self.config_manager.set("start_page", self.start_page_spin.value())
+            self.config_manager.set("end_page", self.end_page_spin.value())
+            self.config_manager.save()
+        
         # Dừng timer nếu đang chạy
         if self.batch_timer.isActive():
             self.batch_timer.stop()
