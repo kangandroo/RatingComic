@@ -950,6 +950,22 @@ class TruyenQQCrawler(BaseCrawler):
             if driver is not None:
                 driver.quit()
         return all_comments
+    
+    def crawl_comments_batch(self, comics_list, progress_callback=None):
+        """
+        Crawl comments cho danh sách truyện sử dụng multiprocessing + multithreading
+        
+        Args:
+            comics_list: Danh sách truyện cần crawl comments
+            progress_callback: Callback để báo cáo tiến trình
+            
+        Returns:
+            dict: Kết quả crawl
+        """
+        logger.info(f"Bắt đầu crawl comments batch cho {len(comics_list)} truyện TruyenQQ")
+        
+        # Sử dụng CommentCrawler từ base class
+        return self.crawl_comments_parallel(comics_list, progress_callback)
 
 # Import cần thiết, thêm vào phần đầu nếu cần
 import sys
