@@ -94,16 +94,22 @@ def crawl_single_comic_comments(params):
     Crawl comment cho một truyện trong một process riêng biệt
     
     Args:
-        params: Tuple (comic, db_path, website_type, progress_queue, worker_id)
+        params: Tuple (comic, db_path, website_type, progress_queue, worker_id, comic_url)
     
     Returns:
-        dict: Kết quả crawl cho comic này
+        tuple: (comic_url, comments, error)
     """
-    comic, db_path, website_type, progress_queue, worker_id = params
+    if len(params) == 6:
+        comic, db_path, website_type, progress_queue, worker_id, comic_url = params
+    else:
+        # Backward compatibility
+        comic, db_path, website_type, progress_queue, worker_id = params
+        comic_url = comic.get("link_truyen", "")
     
     driver = None
     sqlite_helper = None
     comments = []
+    error = None
     
     try:
         logger.info(f"Worker {worker_id}: Bắt đầu crawl comment cho {comic.get('ten_truyen', 'Unknown')}")
@@ -115,14 +121,14 @@ def crawl_single_comic_comments(params):
                 sqlite_helper = SQLiteHelper(db_path)
             except Exception as e:
                 logger.error(f"Worker {worker_id}: Không thể kết nối database: {e}")
-                return {"comic": comic, "comments": [], "error": str(e)}
+                return (comic_url, [], str(e))
             
             # Tạo driver
             try:
                 driver = create_comment_driver()
             except Exception as e:
                 logger.error(f"Worker {worker_id}: Không thể tạo driver: {e}")
-                return {"comic": comic, "comments": [], "error": str(e)}
+                return (comic_url, [], str(e))
             
             # Crawl comments dựa trên website type
             try:
@@ -136,7 +142,7 @@ def crawl_single_comic_comments(params):
                     comments = crawl_truyentranh3q_comments(driver, comic, worker_id)
                 else:
                     logger.warning(f"Worker {worker_id}: Không hỗ trợ website type: {website_type}")
-                    return {"comic": comic, "comments": [], "error": f"Unsupported website: {website_type}"}
+                    return (comic_url, [], f"Unsupported website: {website_type}")
                 
                 # Lưu comments vào database
                 if comments and sqlite_helper:
@@ -147,16 +153,16 @@ def crawl_single_comic_comments(params):
                     progress_queue.put({"type": "progress", "worker_id": worker_id, "count": len(comments)})
                 
                 logger.info(f"Worker {worker_id}: Hoàn thành crawl {len(comments)} comments cho {comic.get('ten_truyen', '')}")
-                return {"comic": comic, "comments": comments, "error": None}
+                return (comic_url, comments, None)
                 
             except Exception as e:
                 logger.error(f"Worker {worker_id}: Lỗi khi crawl comments: {e}")
                 logger.error(traceback.format_exc())
-                return {"comic": comic, "comments": [], "error": str(e)}
+                return (comic_url, [], str(e))
     
     except Exception as e:
         logger.error(f"Worker {worker_id}: Lỗi tổng quát: {e}")
-        return {"comic": comic, "comments": [], "error": str(e)}
+        return (comic_url, [], str(e))
     
     finally:
         # Dọn dẹp tài nguyên
@@ -389,17 +395,17 @@ class CommentCrawler:
         Crawl comments cho danh sách truyện sử dụng multiprocessing
         
         Args:
-            comics_list: Danh sách truyện cần crawl comments
+            comics_list: Danh sách truyện cần crawl comments hoặc crawl_data
             progress_callback: Callback để báo cáo tiến trình
             
         Returns:
-            dict: Kết quả crawl {total_comments, total_comics, errors}
+            dict: {comic_url: [comments]} - Comments theo từng truyện
         """
         if not comics_list:
-            return {"total_comments": 0, "total_comics": 0, "errors": []}
+            return {}
         
         total_comics = len(comics_list)
-        total_comments = 0
+        comments_by_url = {}
         errors = []
         
         try:
@@ -412,14 +418,34 @@ class CommentCrawler:
                 progress_queue = manager.Queue()
                 
                 # Chuẩn bị parameters cho các worker
-                worker_params = [
-                    (comic, self.db_path, self.website_type, progress_queue, i)
-                    for i, comic in enumerate(comics_list)
-                ]
+                worker_params = []
+                for i, comic_data in enumerate(comics_list):
+                    # Xử lý cả format cũ (comic dict) và format mới (crawl_data)
+                    if isinstance(comic_data, dict) and 'comic_url' in comic_data:
+                        # Format mới từ crawl_comments_batch
+                        comic_url = comic_data['comic_url']
+                        comic_name = comic_data.get('comic_name', 'Unknown')
+                        source = comic_data.get('source', self.website_type)
+                        original_comic = comic_data.get('comic_data', comic_data)
+                    else:
+                        # Format cũ - comic dict trực tiếp
+                        comic_url = comic_data.get("link_truyen", "")
+                        comic_name = comic_data.get('ten_truyen', 'Unknown')
+                        source = comic_data.get('nguon', self.website_type)
+                        original_comic = comic_data
+                    
+                    if comic_url:
+                        worker_params.append((
+                            original_comic, self.db_path, source, progress_queue, i, comic_url
+                        ))
+                
+                if not worker_params:
+                    logger.warning("Không có truyện hợp lệ để crawl comments")
+                    return {}
                 
                 # Sử dụng multiprocessing Pool
                 with Pool(processes=self.max_workers) as pool:
-                    logger.info(f"Bắt đầu crawl comments cho {total_comics} truyện với {self.max_workers} processes")
+                    logger.info(f"Bắt đầu crawl comments cho {len(worker_params)} truyện với {self.max_workers} processes")
                     
                     # Map async để có thể theo dõi progress
                     result = pool.map_async(crawl_single_comic_comments, worker_params)
@@ -433,40 +459,43 @@ class CommentCrawler:
                             if progress_data["type"] == "progress":
                                 completed += 1
                                 if progress_callback:
-                                    progress_callback.emit(int((completed / total_comics) * 100))
+                                    progress_callback(int((completed / total_comics) * 100))
                         except:
-                            pass
-                        time.sleep(0.1)
+                            time.sleep(0.1)
+                            continue
                     
                     # Lấy kết quả
-                    results = result.get(timeout=300)  # Timeout 5 phút
+                    results = result.get(timeout=300)  # 5 phút timeout
                     
                     # Xử lý kết quả
-                    for result_data in results:
-                        if result_data.get("error"):
-                            errors.append({
-                                "comic": result_data["comic"].get("ten_truyen", "Unknown"),
-                                "error": result_data["error"]
-                            })
+                    for i, (comic_url, comments, error) in enumerate(results):
+                        if error:
+                            errors.append(f"Comic {i+1}: {error}")
+                            comments_by_url[comic_url] = []
                         else:
-                            total_comments += len(result_data.get("comments", []))
-            
-            logger.info(f"Hoàn thành crawl comments: {total_comments} comments từ {total_comics} truyện")
-            
-            return {
-                "total_comments": total_comments,
-                "total_comics": total_comics,
-                "errors": errors
-            }
-        
+                            comments_by_url[comic_url] = comments if comments else []
+                    
+                    total_comments = sum(len(comments) for comments in comments_by_url.values())
+                    logger.info(f"Hoàn thành crawl comments: {total_comments} comments cho {len(worker_params)} truyện")
+                    
+                    if errors:
+                        logger.warning(f"Có {len(errors)} lỗi trong quá trình crawl: {errors[:3]}")
+                    
+                    return comments_by_url
+                        
         except Exception as e:
-            logger.error(f"Lỗi khi crawl comments parallel: {e}")
+            logger.error(f"Lỗi nghiêm trọng trong crawl_comments_parallel: {str(e)}")
             logger.error(traceback.format_exc())
-            return {
-                "total_comments": 0,
-                "total_comics": 0,
-                "errors": [{"comic": "System", "error": str(e)}]
-            }
+            # Trả về dict rỗng cho tất cả comics
+            empty_result = {}
+            for comic_data in comics_list:
+                if isinstance(comic_data, dict) and 'comic_url' in comic_data:
+                    comic_url = comic_data['comic_url']
+                else:
+                    comic_url = comic_data.get("link_truyen", "")
+                if comic_url:
+                    empty_result[comic_url] = []
+            return empty_result
 
 
 # Thiết lập exception handler

@@ -83,7 +83,7 @@ class CrawlerFactory:
             'worker_count': worker_count
         }
         
-        logger.info(f"Tham số crawler: start_page={start_page}, end_page={end_page}, max_pages={actual_max_pages}, worker_count={worker_count}")
+        # logger.info(f"Tham số crawler: start_page={start_page}, end_page={end_page}, max_pages={actual_max_pages}, worker_count={worker_count}")
         
         if crawler_type == "TruyenQQ":
             return TruyenQQCrawler(

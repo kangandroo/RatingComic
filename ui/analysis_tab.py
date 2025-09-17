@@ -737,60 +737,263 @@ class DetailAnalysisTab(QWidget):
     
     def analyze_comics(self, progress_callback):
         """
-        Phân tích dữ liệu cho tất cả truyện đã chọn với xử lý batch
+        Phân tích dữ liệu cho tất cả truyện đã chọn với xử lý song song tối ưu
         """
-        BATCH_SIZE = 1
-        
         try:
-            results = []
             total_comics = len(self.selected_comics)
-            processed_count = 0
             start_time = time.time()
             
-            # Phân chia truyện thành các batch
-            for batch_start in range(0, total_comics, BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, total_comics)
-                current_batch = self.selected_comics[batch_start:batch_end]
+            logger.info(f"\n{'='*60}")
+            logger.info(f"BẮT ĐẦU PHÂN TÍCH {total_comics} TRUYỆN VỚI CRAWL SONG SONG")
+            logger.info(f"{'='*60}")
+            
+            # Nhóm truyện theo nguồn (các truyện được chọn có thể từ nhiều nguồn khác nhau)
+            comics_by_source = {}
+            for comic in self.selected_comics:
+                nguon = comic.get("nguon", "TruyenQQ")
+                if nguon not in comics_by_source:
+                    comics_by_source[nguon] = []
+                comics_by_source[nguon].append(comic)
+            
+            logger.info(f"Phân nhóm truyện theo nguồn:")
+            for source, comics_list in comics_by_source.items():
+                logger.info(f"  - {source}: {len(comics_list)} truyện")
+            
+            # Xử lý từng nguồn với crawl song song
+            all_results = []
+            processed_count = 0
+            
+            for source_index, (nguon, comics_list) in enumerate(comics_by_source.items(), 1):
+                logger.info(f"\n[NGUỒN {source_index}/{len(comics_by_source)}] Xử lý {len(comics_list)} truyện từ {nguon}")
                 
-                logger.info(f"\n{'='*50}")
-                logger.info(f"Đang xử lý batch {batch_start//BATCH_SIZE + 1}/{(total_comics-1)//BATCH_SIZE + 1}")
-                logger.info(f"Batch truyện {batch_start+1} đến {batch_end}/{total_comics}")
-                
-                # Sử dụng crawl_comments_batch song song mới
-                batch_results = self.process_comic_batch_parallel(
-                    current_batch,
-                    processed_count,
-                    total_comics,
+                # Xử lý toàn bộ truyện trong nguồn này bằng crawl song song
+                source_results = self.process_source_parallel(
+                    nguon, 
+                    comics_list, 
+                    processed_count, 
+                    total_comics, 
                     progress_callback
                 )
                 
-                results.extend(batch_results)
-                processed_count += len(current_batch)
+                all_results.extend(source_results)
+                processed_count += len(comics_list)
                 
-                # Log thông tin về batch
-                batch_time = time.time() - start_time
-                avg_time_per_comic = batch_time / (processed_count or 1)
+                # Log tiến độ
+                elapsed_time = time.time() - start_time
+                avg_time_per_comic = elapsed_time / (processed_count or 1)
                 remaining_comics = total_comics - processed_count
                 estimated_remaining_time = avg_time_per_comic * remaining_comics
                 
-                logger.info(f"Tiến độ: {processed_count}/{total_comics} truyện")
-                logger.info(f"Thời gian xử lý trung bình/truyện: {avg_time_per_comic:.2f} giây")
-                logger.info(f"Ước tính thời gian còn lại: {estimated_remaining_time:.2f} giây")
+                logger.info(f"Tiến độ tổng: {processed_count}/{total_comics} truyện")
+                logger.info(f"Thời gian trung bình/truyện: {avg_time_per_comic:.2f} giây")
+                if remaining_comics > 0:
+                    logger.info(f"Ước tính thời gian còn lại: {estimated_remaining_time:.2f} giây")
                 
-                # Dọn dẹp tài nguyên sau mỗi batch
-                self.cleanup_batch_resources()
-                
-                # Tạm dừng ngắn giữa các batch để tránh quá tải
-                time.sleep(2)
+                # Nghỉ ngắn giữa các nguồn
+                if source_index < len(comics_by_source):
+                    time.sleep(1)
             
             # Sắp xếp kết quả cuối cùng
-            results.sort(key=lambda x: x.get("comprehensive_rating", 0), reverse=True)
-            return results
+            all_results.sort(key=lambda x: x.get("comprehensive_rating", 0), reverse=True)
+            
+            total_time = time.time() - start_time
+            logger.info(f"\n{'='*60}")
+            logger.info(f"HOÀN THÀNH PHÂN TÍCH {total_comics} TRUYỆN")
+            logger.info(f"Tổng thời gian: {total_time:.2f} giây")
+            logger.info(f"Trung bình: {total_time/total_comics:.2f} giây/truyện")
+            logger.info(f"{'='*60}")
+            
+            return all_results
             
         except Exception as e:
             logger.error(f"Lỗi trong quá trình phân tích: {str(e)}")
             logger.error(traceback.format_exc())
             raise
+
+    def process_source_parallel(self, nguon, comics_list, processed_count, total_comics, progress_callback):
+        """
+        Xử lý crawl comments song song cho tất cả truyện từ một nguồn cụ thể
+        SỬ DỤNG MULTITHREADING với method crawl_comments gốc
+        
+        Args:
+            nguon: Tên nguồn (TruyenQQ, NetTruyen, Manhuavn, Truyentranh3q)
+            comics_list: Danh sách truyện từ nguồn này
+            processed_count: Số truyện đã xử lý trước đó
+            total_comics: Tổng số truyện cần xử lý
+            progress_callback: Callback để báo cáo tiến trình
+            
+        Returns:
+            List[dict]: Danh sách kết quả phân tích
+        """
+        results = []
+        
+        # Thiết lập time limit
+        time_limit = None
+        days_limit = None
+        if self.limit_checkbox.isChecked():
+            days_limit = self.limit_spinbox.value()
+            time_limit = datetime.now() - timedelta(days=days_limit)
+            logger.info(f"Giới hạn crawl comment {days_limit} ngày gần đây")
+        
+        try:
+            logger.info(f"Khởi tạo crawler cho nguồn: {nguon}")
+            
+            # Khởi tạo crawler cho nguồn cụ thể
+            crawler = self.crawler_factory.create_crawler(
+                nguon,
+                self.db_manager,
+                self.config_manager
+            )
+            
+            # PHASE 1: CRAWL COMMENTS SONG SONG BẰNG MULTITHREADING
+            logger.info(f"🚀 PHASE 1: Crawl comments MULTITHREADING cho {len(comics_list)} truyện từ {nguon}")
+            
+            all_comments_data = {}
+            completed_count = 0
+            total_count = len(comics_list)
+            
+            # Sử dụng ThreadPoolExecutor để crawl song song
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import threading
+            
+            # Lock để thread-safe progress update
+            progress_lock = threading.Lock()
+            
+            def crawl_single_comic(comic_index, comic):
+                """Crawl comments cho một truyện"""
+                nonlocal completed_count
+                
+                comic_url = comic.get("link_truyen", "")
+                comic_name = comic.get("ten_truyen", "Unknown")
+                
+                try:
+                    logger.info(f"🔗 [{comic_index+1}/{total_count}] Thread bắt đầu crawl: {comic_name}")
+                    
+                    # SỬ DỤNG METHOD CRAWL_COMMENTS GỐC CỦA CRAWLER
+                    comments = crawler.crawl_comments(
+                        comic, 
+                        time_limit=time_limit, 
+                        days_limit=days_limit
+                    )
+                    
+                    comment_count = len(comments) if comments else 0
+                    logger.info(f"✅ [{comic_index+1}/{total_count}] Thread hoàn thành: {comic_name} ({comment_count} comments)")
+                    
+                    return comic_url, comments if comments else [], None
+                    
+                except Exception as e:
+                    logger.error(f"❌ [{comic_index+1}/{total_count}] Thread lỗi: {comic_name} - {str(e)}")
+                    return comic_url, [], str(e)
+            
+            # Tạo ThreadPool và submit các tasks
+            max_workers = min(4, len(comics_list))  # Tối đa 4 threads để tránh quá tải
+            logger.info(f"Sử dụng {max_workers} threads để crawl song song")
+            
+            start_crawl_time = time.time()
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit tất cả tasks
+                future_to_comic = {
+                    executor.submit(crawl_single_comic, i, comic): (i, comic) 
+                    for i, comic in enumerate(comics_list)
+                }
+                
+                # Chờ và thu thập kết quả với progress update thread-safe
+                for future in as_completed(future_to_comic):
+                    comic_index, comic = future_to_comic[future]
+                    comic_url, comments, error = future.result()
+                    
+                    if error:
+                        logger.warning(f"Lỗi crawl {comic_url}: {error}")
+                        all_comments_data[comic_url] = []
+                    else:
+                        all_comments_data[comic_url] = comments
+                    
+                    # Thread-safe progress update CHỈ CẬP NHẬT 1 LẦN KHI HOÀN THÀNH
+                    with progress_lock:
+                        completed_count += 1
+                        
+                        # Progress callback cho crawl phase (60% tổng tiến trình)
+                        if progress_callback:
+                            # Tính phần trăm cho phase crawl (60% tổng)
+                            crawl_progress_in_source = completed_count / total_count
+                            crawl_progress_overall = crawl_progress_in_source * 0.6
+                            
+                            # Tính base progress từ nguồn đã xử lý trước đó
+                            base_progress = (processed_count / total_comics) * 100
+                            
+                            # Tính current progress của nguồn hiện tại
+                            current_source_progress = (crawl_progress_overall * len(comics_list) / total_comics) * 100
+                            
+                            # Tổng overall progress
+                            overall_progress = base_progress + current_source_progress
+                            
+                            progress_callback.emit(int(min(100, overall_progress)))
+                            
+                            # Log progress để debug
+                            if completed_count % 10 == 0 or completed_count == total_count:
+                                logger.debug(f"Progress: {completed_count}/{total_count} crawl done, overall: {overall_progress:.1f}%")
+            
+            crawl_time = time.time() - start_crawl_time
+            total_comments = sum(len(comments) for comments in all_comments_data.values())
+            logger.info(f"✅ Crawl MULTITHREADING hoàn thành: {total_comments} comments trong {crawl_time:.2f} giây")
+            
+            # PHASE 2: PHÂN TÍCH SENTIMENT TUẦN TỰ CHO TẤT CẢ TRUYỆN
+            logger.info(f"🧠 PHASE 2: Phân tích sentiment cho {len(comics_list)} truyện")
+            
+            for i, comic in enumerate(comics_list):
+                try:
+                    comic_url = comic.get("link_truyen", "")
+                    comments = all_comments_data.get(comic_url, [])
+                    
+                    logger.info(f"  [{processed_count + i + 1}/{total_comics}] Sentiment: {comic['ten_truyen']} ({len(comments)} comments)")
+                    
+                    if not comments:
+                        logger.warning(f"  ⚠️  Không có comments cho truyện: {comic['ten_truyen']}")
+                        result = self.create_basic_result(comic)
+                    else:
+                        # Phân tích sentiment
+                        result = self.analyze_comments_sentiment(comic, comments)
+                    
+                    results.append(result)
+                    
+                    # Update progress cho sentiment phase (40% còn lại)
+                    if progress_callback:
+                        # Tính phần trăm cho phase sentiment (40% tổng)
+                        sentiment_progress_in_source = (i + 1) / len(comics_list)
+                        sentiment_progress_overall = 0.6 + (sentiment_progress_in_source * 0.4)
+                        
+                        # Tính base progress từ nguồn đã xử lý trước đó
+                        base_progress = (processed_count / total_comics) * 100
+                        
+                        # Tính current progress của nguồn hiện tại
+                        current_source_progress = (sentiment_progress_overall * len(comics_list) / total_comics) * 100
+                        
+                        # Tổng overall progress
+                        overall_progress = base_progress + current_source_progress
+                        
+                        progress_callback.emit(int(min(100, overall_progress)))
+                        
+                except Exception as e:
+                    logger.error(f"Lỗi phân tích sentiment cho {comic.get('ten_truyen', '')}: {str(e)}")
+                    results.append(self.create_basic_result(comic))
+                    continue
+            
+            total_comments_found = sum(len(all_comments_data.get(comic.get("link_truyen", ""), [])) for comic in comics_list)
+            logger.info(f"✅ Hoàn thành nguồn {nguon}: {len(results)} truyện, {total_comments_found} comments")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Lỗi nghiêm trọng khi xử lý nguồn {nguon}: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Tạo kết quả cơ bản cho tất cả truyện bị lỗi
+            fallback_results = []
+            for comic in comics_list:
+                fallback_results.append(self.create_basic_result(comic))
+            
+            return fallback_results
 
     def process_comic_batch(self, comics_batch, processed_count, total_comics, progress_callback):
         """Xử lý một batch truyện"""
@@ -1138,96 +1341,20 @@ class DetailAnalysisTab(QWidget):
                     f"Lỗi khi xóa phân tích sentiment: {str(e)}"
                 )
     
-    def process_comic_batch_parallel(self, comics_batch, processed_count, total_comics, progress_callback):
-        """Xử lý một batch truyện với crawl comments song song"""
-        batch_results = []
+    def process_comic_batch_parallel_deprecated(self, comics_batch, processed_count, total_comics, progress_callback):
+        """
+        [DEPRECATED] Method cũ - sử dụng process_source_parallel thay thế
+        Xử lý một batch truyện với crawl comments song song - tất cả truyện thuộc cùng một nguồn
+        """
+        logger.warning("Sử dụng method deprecated process_comic_batch_parallel_deprecated")
+        logger.warning("Khuyến nghị sử dụng process_source_parallel thay thế")
         
-        time_limit = None
-        days_limit = None
-        if self.limit_checkbox.isChecked():
-            days_limit = self.limit_spinbox.value()
-            time_limit = datetime.now() - timedelta(days=days_limit)
-            logger.info(f"Giới hạn crawl comment {days_limit} ngày gần đây")
-        
-        try:
-            # Nhóm truyện theo nguồn để crawl song song
-            comics_by_source = {}
-            for comic in comics_batch:
-                nguon = comic.get("nguon", "TruyenQQ")
-                if nguon not in comics_by_source:
-                    comics_by_source[nguon] = []
-                comics_by_source[nguon].append(comic)
-            
-            # Crawl comments song song cho từng nguồn
-            all_comments_data = {}
-            for nguon, comics_list in comics_by_source.items():
-                logger.info(f"Bắt đầu crawl comments song song cho {len(comics_list)} truyện từ {nguon}")
-                
-                # Khởi tạo crawler
-                crawler = self.crawler_factory.create_crawler(
-                    nguon,
-                    self.db_manager,
-                    self.config_manager
-                )
-                
-                # Sử dụng method crawl_comments_batch mới
-                if hasattr(crawler, 'crawl_comments_batch'):
-                    # Progress callback cho crawl comments
-                    def comment_progress_callback(progress):
-                        if progress_callback:
-                            # Cập nhật tiến trình tổng thể
-                            overall_progress = ((processed_count + progress / 100 * len(comics_list)) / total_comics) * 100
-                            progress_callback.emit(int(overall_progress))
-                    
-                    comments_result = crawler.crawl_comments_batch(comics_list, comment_progress_callback)
-                    
-                    # Lưu kết quả comments theo comic
-                    for comic in comics_list:
-                        comic_url = comic.get("link_truyen", "")
-                        all_comments_data[comic_url] = []
-                        # Note: Cần điều chỉnh logic để lấy comments cho từng comic từ kết quả chung
-                else:
-                    # Fallback sang phương pháp cũ nếu crawler chưa hỗ trợ
-                    logger.warning(f"Crawler {nguon} chưa hỗ trợ crawl_comments_batch, sử dụng phương pháp cũ")
-                    for comic in comics_list:
-                        comments = crawler.crawl_comments(comic, time_limit=time_limit, days_limit=days_limit)
-                        all_comments_data[comic.get("link_truyen", "")] = comments
-            
-            # Xử lý sentiment cho từng comic
-            for i, comic in enumerate(comics_batch):
-                try:
-                    comic_url = comic.get("link_truyen", "")
-                    comments = all_comments_data.get(comic_url, [])
-                    
-                    logger.info(f"[{processed_count + i + 1}/{total_comics}] "
-                            f"Phân tích sentiment cho: {comic['ten_truyen']} ({len(comments)} comments)")
-                    
-                    if not comments:
-                        logger.warning(f"Không tìm thấy comment cho truyện {comic['ten_truyen']}")
-                        batch_results.append(self.create_basic_result(comic))
-                        continue
-                    
-                    # Phân tích sentiment
-                    result = self.analyze_comments_sentiment(comic, comments)
-                    batch_results.append(result)
-                    
-                    # Cập nhật tiến trình
-                    if progress_callback:
-                        overall_progress = ((processed_count + i + 1) / total_comics) * 100
-                        progress_callback.emit(int(overall_progress))
-                        
-                except Exception as e:
-                    logger.error(f"Lỗi khi xử lý comic {comic.get('ten_truyen', '')}: {str(e)}")
-                    batch_results.append(self.create_basic_result(comic))
-                    continue
-            
-            return batch_results
-            
-        except Exception as e:
-            logger.error(f"Lỗi trong quá trình xử lý batch song song: {str(e)}")
-            logger.error(traceback.format_exc())
-            # Fallback sang phương pháp cũ
-            return self.process_comic_batch(comics_batch, processed_count, total_comics, progress_callback)
+        # Fallback sang method mới
+        if comics_batch:
+            nguon = comics_batch[0].get("nguon", "TruyenQQ")
+            return self.process_source_parallel(nguon, comics_batch, processed_count, total_comics, progress_callback)
+        else:
+            return []
     
     def analyze_comments_sentiment(self, comic, comments):
         """Phân tích sentiment cho comments của một comic"""
@@ -1242,7 +1369,9 @@ class DetailAnalysisTab(QWidget):
                     continue
                 
                 # Phân tích sentiment
-                sentiment, score = self.sentiment_analyzer.analyze_sentiment(content)
+                sentiment_result = self.sentiment_analyzer.analyze(content)
+                sentiment = sentiment_result.get("sentiment", "neutral")
+                score = sentiment_result.get("score", 0.5)
                 sentiment_stats[sentiment] += 1
                 
                 # Lưu comment đã xử lý
@@ -1267,3 +1396,67 @@ class DetailAnalysisTab(QWidget):
         except Exception as e:
             logger.error(f"Lỗi khi phân tích sentiment cho {comic.get('ten_truyen', '')}: {str(e)}")
             return self.create_basic_result(comic)
+    
+    def create_sentiment_result(self, comic, sentiment_stats, processed_comments):
+        """Tạo kết quả phân tích sentiment"""
+        try:
+            # Tính toán điểm số
+            rating_calculator = RatingFactory.get_calculator(comic.get('nguon', 'TruyenQQ'))
+            base_rating = rating_calculator.calculate(comic)
+            
+            # Tính điểm sentiment
+            sentiment_rating = self.calculate_sentiment_rating(
+                sentiment_stats["positive"],
+                sentiment_stats["negative"],
+                sentiment_stats["neutral"]
+            )
+            
+            # Tính điểm tổng hợp
+            comprehensive_rating = base_rating * 0.6 + sentiment_rating * 0.4
+            
+            # Lưu comments đã xử lý vào database
+            comic_id = comic.get("id")
+            if comic_id and processed_comments:
+                self.db_manager.save_comments(comic_id, processed_comments)
+            
+            # Tạo kết quả cho truyện
+            return {
+                **comic.copy(),
+                "base_rating": base_rating,
+                "sentiment_rating": sentiment_rating,
+                "comprehensive_rating": comprehensive_rating,
+                "comments": processed_comments,
+                "positive_count": sentiment_stats["positive"],
+                "negative_count": sentiment_stats["negative"],
+                "neutral_count": sentiment_stats["neutral"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi tạo kết quả sentiment cho {comic.get('ten_truyen', '')}: {str(e)}")
+            return self.create_basic_result(comic)
+    
+    def save_sentiment_result(self, result):
+        """Lưu kết quả phân tích sentiment vào database"""
+        try:
+            # Lưu thông tin phân tích vào database nếu cần
+            comic_id = result.get("id")
+            if comic_id:
+                # Cập nhật thông tin sentiment vào comic record
+                self.db_manager.set_source(result.get("nguon", "TruyenQQ"))
+                
+                # Lưu sentiment rating và các thông tin liên quan
+                sentiment_data = {
+                    "sentiment_rating": result.get("sentiment_rating", 0),
+                    "comprehensive_rating": result.get("comprehensive_rating", 0),
+                    "positive_count": result.get("positive_count", 0),
+                    "negative_count": result.get("negative_count", 0),
+                    "neutral_count": result.get("neutral_count", 0),
+                    "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # Cập nhật comic với thông tin sentiment (implementation tùy thuộc vào database schema)
+                logger.debug(f"Lưu kết quả sentiment cho comic ID {comic_id}: {sentiment_data}")
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu kết quả sentiment: {str(e)}")
+            logger.error(traceback.format_exc())

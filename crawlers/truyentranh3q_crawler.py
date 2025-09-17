@@ -1030,19 +1030,61 @@ class Truyentranh3qCrawler(BaseCrawler):
     
     def crawl_comments_batch(self, comics_list, progress_callback=None):
         """
-        Crawl comments cho danh sách truyện sử dụng multiprocessing + multithreading
+        Crawl comments cho danh sách truyện Truyentranh3q sử dụng multiprocessing + multithreading
         
         Args:
             comics_list: Danh sách truyện cần crawl comments
             progress_callback: Callback để báo cáo tiến trình
             
         Returns:
-            dict: Kết quả crawl
+            dict: {comic_url: [comments]} - Comments theo từng truyện
         """
         logger.info(f"Bắt đầu crawl comments batch cho {len(comics_list)} truyện Truyentranh3q")
         
-        # Sử dụng CommentCrawler từ base class
-        return self.crawl_comments_parallel(comics_list, progress_callback)
+        try:
+            # Chuẩn bị dữ liệu input cho CommentCrawler
+            crawl_data = []
+            for comic in comics_list:
+                comic_url = comic.get("link_truyen", "")
+                if comic_url:
+                    crawl_data.append({
+                        'comic_url': comic_url,
+                        'comic_name': comic.get('ten_truyen', 'Unknown'),
+                        'source': 'Truyentranh3q',
+                        'comic_data': comic
+                    })
+            
+            if not crawl_data:
+                logger.warning("Không có truyện hợp lệ để crawl comments")
+                return {}
+            
+            # Sử dụng CommentCrawler từ base class để crawl song song
+            batch_result = self.crawl_comments_parallel(crawl_data, progress_callback)
+            
+            # Chuyển đổi kết quả về format {comic_url: comments}
+            comments_by_url = {}
+            if isinstance(batch_result, dict):
+                for comic_url, comments in batch_result.items():
+                    comments_by_url[comic_url] = comments if comments else []
+            else:
+                # Nếu trả về danh sách, map với comics_list
+                for i, comic in enumerate(comics_list):
+                    comic_url = comic.get("link_truyen", "")
+                    if i < len(batch_result) and batch_result[i]:
+                        comments_by_url[comic_url] = batch_result[i]
+                    else:
+                        comments_by_url[comic_url] = []
+            
+            total_comments = sum(len(comments) for comments in comments_by_url.values())
+            logger.info(f"Hoàn thành crawl comments batch Truyentranh3q: {total_comments} comments cho {len(comics_list)} truyện")
+            
+            return comments_by_url
+            
+        except Exception as e:
+            logger.error(f"Lỗi trong crawl_comments_batch Truyentranh3q: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Trả về dict rỗng cho tất cả comics
+            return {comic.get("link_truyen", ""): [] for comic in comics_list}
 
 # Import cần thiết, thêm vào phần đầu nếu cần
 import sys
